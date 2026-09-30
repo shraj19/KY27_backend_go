@@ -8,13 +8,80 @@ import (
 	cashfree "github.com/cashfree/cashfree-pg/v5"
 )
 
-// CashfreeConfig holds Cashfree credentials and callback URLs.
+// CashfreeConfig defines what the Cashfree provider needs.
+// Exported so config.Load() can populate it.
 type CashfreeConfig struct {
-	Environment  string
 	ClientID     string
 	ClientSecret string
+	Environment  string // "SANDBOX" | "PRODUCTION"
 	ReturnURL    string
 	NotifyURL    string
+}
+
+// ConfigKeys returns the env var names this provider expects.
+// Used by config loader to know what to read.
+func (CashfreeConfig) ConfigKeys() []string {
+	return []string{
+		"CASHFREE_CLIENT_ID",
+		"CASHFREE_CLIENT_SECRET",
+		"CASHFREE_ENV",
+		"CASHFREE_RETURN_URL",
+		"CASHFREE_NOTIFY_URL",
+	}
+}
+
+// FromMap populates config from a string map (from env loader).
+func (c *CashfreeConfig) FromMap(m map[string]string) {
+	c.ClientID = m["CASHFREE_CLIENT_ID"]
+	c.ClientSecret = m["CASHFREE_CLIENT_SECRET"]
+	c.Environment = m["CASHFREE_ENV"]
+	c.ReturnURL = m["CASHFREE_RETURN_URL"]
+	c.NotifyURL = m["CASHFREE_NOTIFY_URL"]
+}
+
+// Validate checks required fields.
+func (c CashfreeConfig) Validate() error {
+	if c.ClientID == "" || c.ClientSecret == "" {
+		return fmt.Errorf("cashfree: CASHFREE_CLIENT_ID and CASHFREE_CLIENT_SECRET required")
+	}
+	if c.Environment != "SANDBOX" && c.Environment != "PRODUCTION" {
+		return fmt.Errorf("cashfree: CASHFREE_ENV must be SANDBOX or PRODUCTION, got %q", c.Environment)
+	}
+	return nil
+}
+
+func init() {
+	Register("cashfree", newCashfreeFromMap)
+}
+
+func newCashfreeFromMap(m map[string]string) (PaymentGateway, error) {
+	var cfg CashfreeConfig
+	cfg.FromMap(m)
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return NewCashfreeProvider(cfg)
+}
+
+// NewCashfreeProvider builds a Cashfree gateway from typed config.
+// Exported for direct use in tests with fake config.
+func NewCashfreeProvider(cfg CashfreeConfig) (PaymentGateway, error) {
+	env := cashfree.SANDBOX
+	if cfg.Environment == "PRODUCTION" {
+		env = cashfree.PRODUCTION
+	}
+
+	client := &cashfree.Cashfree{
+		XClientId:     &cfg.ClientID,
+		XClientSecret: &cfg.ClientSecret,
+		XEnvironment:  &env,
+	}
+
+	return &cashfreeProvider{
+		client:    client,
+		returnURL: cfg.ReturnURL,
+		notifyURL: cfg.NotifyURL,
+	}, nil
 }
 
 type cashfreeProvider struct {
@@ -29,32 +96,6 @@ var _ PaymentGateway = (*cashfreeProvider)(nil)
 
 func (c *cashfreeProvider) OrderExpiry() time.Duration {
 	return cashfreeOrderExpiry
-}
-
-// NewCashfreeProvider builds a Cashfree gateway from cfg.
-func NewCashfreeProvider(cfg CashfreeConfig) (PaymentGateway, error) {
-	if cfg.ClientID == "" || cfg.ClientSecret == "" {
-		return nil, fmt.Errorf("cashfree: missing client id or secret")
-	}
-
-	env := cashfree.SANDBOX
-	if cfg.Environment == "PRODUCTION" {
-		env = cashfree.PRODUCTION
-	}
-
-	clientID := cfg.ClientID
-	clientSecret := cfg.ClientSecret
-	client := &cashfree.Cashfree{
-		XClientId:     &clientID,
-		XClientSecret: &clientSecret,
-		XEnvironment:  &env,
-	}
-
-	return &cashfreeProvider{
-		client:    client,
-		returnURL: cfg.ReturnURL,
-		notifyURL: cfg.NotifyURL,
-	}, nil
 }
 
 // CreateOrder creates an order with Cashfree and returns the payment session.
@@ -110,7 +151,6 @@ func (c *cashfreeProvider) VerifyPayment(ctx context.Context, orderID string) (S
 	return mapCashfreeStatus(derefStr(resp.OrderStatus)), nil
 }
 
-// mapCashfreeStatus maps a Cashfree status to Status.
 func mapCashfreeStatus(s string) Status {
 	switch s {
 	case "PAID":

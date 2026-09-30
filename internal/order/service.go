@@ -1,6 +1,5 @@
-// Package order runs the order-creation pipeline: idempotency, price
-// resolution, coupon validation, ownership check, locking, gateway order
-// creation, and persistence. UserID is taken from the authenticated request.
+// Package order creates payment orders given pre-priced requests from Node.
+// Node owns cart, pricing, and fulfillment. This service just collects money.
 package order
 
 import (
@@ -13,51 +12,64 @@ import (
 
 	"github.com/google/uuid"
 
-	"ky27/backend/internal/catalog"
 	"ky27/backend/internal/db"
 	"ky27/backend/internal/payment"
 )
 
-// Sentinel errors for HTTP status mapping.
 var (
-	ErrAlreadyOwnsPass     = errors.New("user already owns a pass")
-	ErrCouponNotApplicable = errors.New("coupon not applicable")
-	ErrLocked              = errors.New("a payment is already in progress for this user")
 	ErrIdempotencyMismatch = errors.New("idempotency key reused with a different request")
 )
 
-// Request is the input to create an order.
+// Buyer identifies who is paying.
+type Buyer struct {
+	ID    string
+	Phone string
+	Email string
+	Name  string
+}
+
+// Item is one line item (one ticket for one attendee).
+type Item struct {
+	PassID        string
+	AmountPaise   int64
+	AttendeeName  string
+	AttendeeEmail string
+	AttendeePhone string
+}
+
+// Request is a pre-priced order from Node. Go trusts the total.
 type Request struct {
-	UserID         string
-	PassID         string
-	CouponID       string
+	OrderID        string // Node's order id
+	Buyer          Buyer
+	Items          []Item // the cart: N tickets for N attendees
+	TotalPaise     int64  // trusted total from Node (sum of items + any discounts)
+	Currency       string
 	IdempotencyKey string
 }
 
-// Result is returned to drive checkout.
+// Result is returned to Node to complete checkout.
 type Result struct {
 	OrderID          string
 	PaymentSessionID string
-	AmountPaise      int64
 	Status           payment.Status
 }
 
-// Service creates orders.
+// Service creates payment orders.
 type Service struct {
-	catalog catalog.Client
-	gateway payment.PaymentGateway
-	queries *db.Queries
+	gateway  payment.PaymentGateway
+	queries  *db.Queries
+	provider string
 }
 
-func NewService(cat catalog.Client, gw payment.PaymentGateway, q *db.Queries) *Service {
-	return &Service{catalog: cat, gateway: gw, queries: q}
+func NewService(gw payment.PaymentGateway, q *db.Queries, provider string) *Service {
+	return &Service{gateway: gw, queries: q, provider: provider}
 }
 
-// Create creates a payment order for req.
-func (s *Service) Create(ctx context.Context, req Request, provider string) (Result, error) {
+// Create creates a payment order with line items. The total is trusted from Node.
+func (s *Service) Create(ctx context.Context, req Request) (Result, error) {
 	bodyHash := hashRequest(req)
 
-	// Return the existing order if this idempotency key was already used.
+	// Idempotency: return existing order if key was already used.
 	if existing, err := s.queries.FindIdempotencyKey(ctx, req.IdempotencyKey); err == nil {
 		if existing.BodyHash != bodyHash {
 			return Result{}, ErrIdempotencyMismatch
@@ -66,77 +78,79 @@ func (s *Service) Create(ctx context.Context, req Request, provider string) (Res
 		if err != nil {
 			return Result{}, fmt.Errorf("order: load idempotent order: %w", err)
 		}
-		return Result{OrderID: order.ID, AmountPaise: order.AmountPaise, Status: payment.Status(order.Status)}, nil
+		return Result{
+			OrderID: order.ID,
+			Status:  payment.Status(order.Status),
+		}, nil
 	}
 
-	// Early rejection; the partial-unique index on orders(user_id) WHERE
-	// status='PAID' enforces this at the database level.
-	hasPass, err := s.queries.UserHasPaidPass(ctx, req.UserID)
-	if err != nil {
-		return Result{}, fmt.Errorf("order: ownership check: %w", err)
-	}
-	if hasPass {
-		return Result{}, ErrAlreadyOwnsPass
+	orderID := req.OrderID
+	if orderID == "" {
+		orderID = "KY27-" + uuid.NewString()
 	}
 
-	// Resolve the price from the catalog.
-	pass, err := s.catalog.GetPass(ctx, req.PassID)
-	if err != nil {
-		return Result{}, fmt.Errorf("order: resolve pass: %w", err)
-	}
-	amount := pass.PricePaise
-
-	// Apply an optional coupon.
-	var couponID *string
-	if req.CouponID != "" {
-		coupon, err := s.catalog.GetCoupon(ctx, req.CouponID, req.UserID)
-		if err != nil {
-			return Result{}, fmt.Errorf("order: resolve coupon: %w", err)
-		}
-		if !coupon.Valid || !coupon.AppliesToUser {
-			return Result{}, ErrCouponNotApplicable
-		}
-		amount -= coupon.DiscountPaise
-		if amount < 0 {
-			amount = 0
-		}
-		couponID = &req.CouponID
+	currency := req.Currency
+	if currency == "" {
+		currency = "INR"
 	}
 
-	orderID := "KY27-" + uuid.NewString()
 	expiry := time.Now().Add(s.gateway.OrderExpiry())
-
-	// Acquire the per-user lock (steals only an expired one).
-	lock, err := s.queries.UpsertPaymentLock(ctx, db.UpsertPaymentLockParams{
-		UserID: req.UserID, OrderID: orderID, ExpiresAt: expiry,
-	})
-	if err != nil || lock.OrderID != orderID {
-		return Result{}, ErrLocked
-	}
 
 	// Create the order at the gateway.
 	created, err := s.gateway.CreateOrder(ctx, payment.Order{
 		ID:          orderID,
-		AmountPaise: amount,
-		Currency:    "INR",
-		Customer:    payment.Customer{ID: req.UserID},
+		AmountPaise: req.TotalPaise,
+		Currency:    currency,
+		Customer: payment.Customer{
+			ID:    req.Buyer.ID,
+			Phone: req.Buyer.Phone,
+			Email: req.Buyer.Email,
+			Name:  req.Buyer.Name,
+		},
 	})
 	if err != nil {
-		_ = s.queries.DeletePaymentLock(ctx, req.UserID)
 		return Result{}, fmt.Errorf("order: gateway create: %w", err)
 	}
 
-	// Persist the order and the idempotency key.
+	// Persist the order.
 	provOrderID := created.ProviderOrderID
 	if _, err := s.queries.CreateOrder(ctx, db.CreateOrderParams{
-		ID: orderID, UserID: req.UserID, PassID: req.PassID, CouponID: couponID,
-		AmountPaise: amount, Currency: "INR", Status: string(payment.StatusActive),
-		Provider: provider, ProviderOrderID: &provOrderID, ExpiresAt: expiry,
+		ID:              orderID,
+		BuyerID:         req.Buyer.ID,
+		TotalPaise:      req.TotalPaise,
+		Currency:        currency,
+		Status:          string(payment.StatusActive),
+		Provider:        s.provider,
+		ProviderOrderID: &provOrderID,
+		ExpiresAt:       expiry,
+		BuyerPhone:      req.Buyer.Phone,
+		BuyerEmail:      req.Buyer.Email,
+		BuyerName:       req.Buyer.Name,
 	}); err != nil {
 		return Result{}, fmt.Errorf("order: persist: %w", err)
 	}
+
+	// Persist each line item.
+	for _, item := range req.Items {
+		itemID := uuid.NewString()
+		if _, err := s.queries.CreateOrderItem(ctx, db.CreateOrderItemParams{
+			ID:            itemID,
+			OrderID:       orderID,
+			PassID:        item.PassID,
+			AmountPaise:   item.AmountPaise,
+			AttendeeName:  item.AttendeeName,
+			AttendeeEmail: item.AttendeeEmail,
+			AttendeePhone: item.AttendeePhone,
+		}); err != nil {
+			return Result{}, fmt.Errorf("order: persist item: %w", err)
+		}
+	}
+
+	// Store the idempotency key.
 	if _, err := s.queries.InsertIdempotencyKey(ctx, db.InsertIdempotencyKeyParams{
-		Key: req.IdempotencyKey, BodyHash: bodyHash, OrderID: orderID,
+		Key:      req.IdempotencyKey,
+		BodyHash: bodyHash,
+		OrderID:  orderID,
 	}); err != nil {
 		return Result{}, fmt.Errorf("order: persist idempotency: %w", err)
 	}
@@ -144,13 +158,12 @@ func (s *Service) Create(ctx context.Context, req Request, provider string) (Res
 	return Result{
 		OrderID:          orderID,
 		PaymentSessionID: created.PaymentSessionID,
-		AmountPaise:      amount,
 		Status:           payment.StatusActive,
 	}, nil
 }
 
-// hashRequest binds an idempotency key to its request payload.
 func hashRequest(r Request) string {
-	sum := sha256.Sum256([]byte(r.UserID + "|" + r.PassID + "|" + r.CouponID))
+	data := fmt.Sprintf("%s|%s|%d|%d|%s", r.OrderID, r.Buyer.ID, r.TotalPaise, len(r.Items), r.IdempotencyKey)
+	sum := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(sum[:])
 }

@@ -45,22 +45,40 @@ type CreatedOrder struct {
 type PaymentGateway interface {
 	CreateOrder(ctx context.Context, o Order) (CreatedOrder, error)
 	VerifyPayment(ctx context.Context, orderID string) (Status, error)
-	// OrderExpiry is the provider's unpaid-order window.
 	OrderExpiry() time.Duration
 }
 
-// Config selects and configures the active gateway.
-type Config struct {
-	Provider string
-	Cashfree CashfreeConfig
+// ProviderFactory creates a PaymentGateway from a generic config map.
+// Each provider registers its factory; the central config loader calls it.
+type ProviderFactory func(cfg map[string]string) (PaymentGateway, error)
+
+// registry holds registered provider factories. Open/Closed: add providers
+// by calling Register, not by modifying this file.
+var registry = map[string]ProviderFactory{}
+
+// Register adds a provider factory. Called by each provider's init().
+func Register(name string, factory ProviderFactory) {
+	if _, exists := registry[name]; exists {
+		panic(fmt.Sprintf("payment: provider %q already registered", name))
+	}
+	registry[name] = factory
 }
 
-// NewGateway constructs the gateway named by cfg.Provider.
-func NewGateway(cfg Config) (PaymentGateway, error) {
-	switch cfg.Provider {
-	case "cashfree":
-		return NewCashfreeProvider(cfg.Cashfree)
-	default:
-		return nil, fmt.Errorf("unknown payment provider %q", cfg.Provider)
+// NewGateway creates the gateway for the named provider using the given config.
+// The config map contains provider-specific key-value pairs.
+func NewGateway(provider string, cfg map[string]string) (PaymentGateway, error) {
+	factory, ok := registry[provider]
+	if !ok {
+		return nil, fmt.Errorf("payment: unknown provider %q", provider)
 	}
+	return factory(cfg)
+}
+
+// RegisteredProviders returns the names of all registered providers.
+func RegisteredProviders() []string {
+	names := make([]string, 0, len(registry))
+	for name := range registry {
+		names = append(names, name)
+	}
+	return names
 }

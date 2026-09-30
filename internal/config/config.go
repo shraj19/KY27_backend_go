@@ -1,121 +1,52 @@
 package config
 
 import (
-	"bufio"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
-	"ky27/backend/internal/payment"
+	"github.com/joho/godotenv"
+	"github.com/kelseyhightower/envconfig"
 )
 
 // Config is the fully-loaded, validated application configuration.
 type Config struct {
-	Port        int
-	CorsOrigins []string
-	Payment     payment.Config
+	Port        int      `envconfig:"PORT" default:"8081"`
+	CorsOrigins []string `envconfig:"CORS_ORIGINS"`
+	DatabaseURL string   `envconfig:"DATABASE_URL" required:"true"`
+	Gateway     string   `envconfig:"PAYMENT_PROVIDER" required:"true"`
+	GatewayCfg  map[string]string
 }
 
-// Load reads .env (if present) and environment variables into a validated Config.
+// Load reads .env (if present), then populates Config from environment.
+// Fails fast if required config is missing.
 func Load() (Config, error) {
-	loadDotEnv(".env")
+	_ = godotenv.Load() // .env → os.Environ; no error if file missing
 
-	cfg := Config{
-		Port:        getIntEnv("PORT", 8081),
-		CorsOrigins: getSliceEnv("CORS_ORIGINS"),
-		Payment: payment.Config{
-			Provider: os.Getenv("PAYMENT_PROVIDER"),
-			Cashfree: payment.CashfreeConfig{
-				Environment:  os.Getenv("CASHFREE_ENV"),
-				ClientID:     os.Getenv("CASHFREE_CLIENT_ID"),
-				ClientSecret: os.Getenv("CASHFREE_CLIENT_SECRET"),
-				ReturnURL:    os.Getenv("CASHFREE_RETURN_URL"),
-				NotifyURL:    os.Getenv("CASHFREE_NOTIFY_URL"),
-			},
-		},
+	var cfg Config
+	if err := envconfig.Process("", &cfg); err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
 	}
 
-	if err := cfg.Validate(); err != nil {
-		return Config{}, err
-	}
+	cfg.GatewayCfg = loadProviderEnv(cfg.Gateway)
 	return cfg, nil
 }
 
-// Validate checks configuration invariants.
-func (c Config) Validate() error {
-	if c.Port <= 0 || c.Port > 65535 {
-		return fmt.Errorf("config: PORT must be 1-65535, got %d", c.Port)
-	}
-
-	switch c.Payment.Provider {
-	case "cashfree":
-		if c.Payment.Cashfree.ClientID == "" || c.Payment.Cashfree.ClientSecret == "" {
-			return fmt.Errorf("config: cashfree selected but CASHFREE_CLIENT_ID / CASHFREE_CLIENT_SECRET missing")
-		}
-		if c.Payment.Cashfree.Environment != "SANDBOX" && c.Payment.Cashfree.Environment != "PRODUCTION" {
-			return fmt.Errorf("config: CASHFREE_ENV must be SANDBOX or PRODUCTION, got %q", c.Payment.Cashfree.Environment)
-		}
-	case "":
-		return fmt.Errorf("config: PAYMENT_PROVIDER is required")
-	default:
-		return fmt.Errorf("config: unknown PAYMENT_PROVIDER %q", c.Payment.Provider)
-	}
-	return nil
-}
-
-// --- env helpers ---
-
-func getIntEnv(key string, fallback int) int {
-	val := os.Getenv(key)
-	if val == "" {
-		return fallback
-	}
-	i, err := strconv.Atoi(val)
-	if err != nil {
-		return fallback
-	}
-	return i
-}
-
-func getSliceEnv(key string) []string {
-	val := os.Getenv(key)
-	if val == "" {
+// loadProviderEnv loads all env vars matching the provider's prefix.
+// For "cashfree", loads CASHFREE_* into a map keyed by full env var name.
+func loadProviderEnv(provider string) map[string]string {
+	if provider == "" {
 		return nil
 	}
-	parts := strings.Split(val, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
 
-// loadDotEnv performs a minimal .env parse: KEY=VALUE lines, ignoring blanks
-// and # comments. Existing environment variables take precedence.
-func loadDotEnv(path string) {
-	f, err := os.Open(path)
-	if err != nil {
-		return // no .env is fine; rely on real env vars
-	}
-	defer f.Close()
+	prefix := strings.ToUpper(provider) + "_"
+	cfg := make(map[string]string)
 
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, val, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		val = strings.Trim(strings.TrimSpace(val), `"'`)
-		if _, exists := os.LookupEnv(key); !exists {
-			_ = os.Setenv(key, val)
+	for _, kv := range os.Environ() {
+		key, val, ok := strings.Cut(kv, "=")
+		if ok && strings.HasPrefix(key, prefix) {
+			cfg[key] = val
 		}
 	}
+	return cfg
 }

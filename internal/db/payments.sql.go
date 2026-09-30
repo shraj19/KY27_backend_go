@@ -12,51 +12,54 @@ import (
 
 const createOrder = `-- name: CreateOrder :one
 INSERT INTO payments.orders (
-    id, user_id, pass_id, coupon_id, amount_paise, currency,
-    status, provider, provider_order_id, expires_at
+    id, buyer_id, total_paise, currency, status, provider,
+    provider_order_id, expires_at, buyer_phone, buyer_email, buyer_name
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 )
-RETURNING id, user_id, pass_id, coupon_id, amount_paise, currency, status, provider, provider_order_id, created_at, updated_at, expires_at
+RETURNING id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at
 `
 
 type CreateOrderParams struct {
 	ID              string    `json:"id"`
-	UserID          string    `json:"user_id"`
-	PassID          string    `json:"pass_id"`
-	CouponID        *string   `json:"coupon_id"`
-	AmountPaise     int64     `json:"amount_paise"`
+	BuyerID         string    `json:"buyer_id"`
+	TotalPaise      int64     `json:"total_paise"`
 	Currency        string    `json:"currency"`
 	Status          string    `json:"status"`
 	Provider        string    `json:"provider"`
 	ProviderOrderID *string   `json:"provider_order_id"`
 	ExpiresAt       time.Time `json:"expires_at"`
+	BuyerPhone      string    `json:"buyer_phone"`
+	BuyerEmail      string    `json:"buyer_email"`
+	BuyerName       string    `json:"buyer_name"`
 }
 
 func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (PaymentsOrder, error) {
 	row := q.db.QueryRow(ctx, createOrder,
 		arg.ID,
-		arg.UserID,
-		arg.PassID,
-		arg.CouponID,
-		arg.AmountPaise,
+		arg.BuyerID,
+		arg.TotalPaise,
 		arg.Currency,
 		arg.Status,
 		arg.Provider,
 		arg.ProviderOrderID,
 		arg.ExpiresAt,
+		arg.BuyerPhone,
+		arg.BuyerEmail,
+		arg.BuyerName,
 	)
 	var i PaymentsOrder
 	err := row.Scan(
 		&i.ID,
-		&i.UserID,
-		&i.PassID,
-		&i.CouponID,
-		&i.AmountPaise,
+		&i.BuyerID,
+		&i.TotalPaise,
 		&i.Currency,
 		&i.Status,
 		&i.Provider,
 		&i.ProviderOrderID,
+		&i.BuyerPhone,
+		&i.BuyerEmail,
+		&i.BuyerName,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExpiresAt,
@@ -64,13 +67,47 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Payme
 	return i, err
 }
 
-const deletePaymentLock = `-- name: DeletePaymentLock :exec
-DELETE FROM payments.payment_locks WHERE user_id = $1
+const createOrderItem = `-- name: CreateOrderItem :one
+INSERT INTO payments.order_items (
+    id, order_id, pass_id, amount_paise, attendee_name, attendee_email, attendee_phone
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7
+)
+RETURNING id, order_id, pass_id, amount_paise, attendee_name, attendee_email, attendee_phone, created_at
 `
 
-func (q *Queries) DeletePaymentLock(ctx context.Context, userID string) error {
-	_, err := q.db.Exec(ctx, deletePaymentLock, userID)
-	return err
+type CreateOrderItemParams struct {
+	ID            string `json:"id"`
+	OrderID       string `json:"order_id"`
+	PassID        string `json:"pass_id"`
+	AmountPaise   int64  `json:"amount_paise"`
+	AttendeeName  string `json:"attendee_name"`
+	AttendeeEmail string `json:"attendee_email"`
+	AttendeePhone string `json:"attendee_phone"`
+}
+
+func (q *Queries) CreateOrderItem(ctx context.Context, arg CreateOrderItemParams) (PaymentsOrderItem, error) {
+	row := q.db.QueryRow(ctx, createOrderItem,
+		arg.ID,
+		arg.OrderID,
+		arg.PassID,
+		arg.AmountPaise,
+		arg.AttendeeName,
+		arg.AttendeeEmail,
+		arg.AttendeePhone,
+	)
+	var i PaymentsOrderItem
+	err := row.Scan(
+		&i.ID,
+		&i.OrderID,
+		&i.PassID,
+		&i.AmountPaise,
+		&i.AttendeeName,
+		&i.AttendeeEmail,
+		&i.AttendeePhone,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const findIdempotencyKey = `-- name: FindIdempotencyKey :one
@@ -90,7 +127,7 @@ func (q *Queries) FindIdempotencyKey(ctx context.Context, key string) (PaymentsI
 }
 
 const getOrder = `-- name: GetOrder :one
-SELECT id, user_id, pass_id, coupon_id, amount_paise, currency, status, provider, provider_order_id, created_at, updated_at, expires_at FROM payments.orders WHERE id = $1
+SELECT id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at FROM payments.orders WHERE id = $1
 `
 
 func (q *Queries) GetOrder(ctx context.Context, id string) (PaymentsOrder, error) {
@@ -98,14 +135,15 @@ func (q *Queries) GetOrder(ctx context.Context, id string) (PaymentsOrder, error
 	var i PaymentsOrder
 	err := row.Scan(
 		&i.ID,
-		&i.UserID,
-		&i.PassID,
-		&i.CouponID,
-		&i.AmountPaise,
+		&i.BuyerID,
+		&i.TotalPaise,
 		&i.Currency,
 		&i.Status,
 		&i.Provider,
 		&i.ProviderOrderID,
+		&i.BuyerPhone,
+		&i.BuyerEmail,
+		&i.BuyerName,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExpiresAt,
@@ -113,35 +151,62 @@ func (q *Queries) GetOrder(ctx context.Context, id string) (PaymentsOrder, error
 	return i, err
 }
 
-const insertCouponRedemption = `-- name: InsertCouponRedemption :one
-INSERT INTO payments.coupon_redemptions (id, coupon_id, user_id, order_id)
-VALUES ($1, $2, $3, $4)
-RETURNING id, coupon_id, user_id, order_id, created_at
+const getOrderByProviderOrderID = `-- name: GetOrderByProviderOrderID :one
+SELECT id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at FROM payments.orders WHERE provider_order_id = $1
 `
 
-type InsertCouponRedemptionParams struct {
-	ID       string `json:"id"`
-	CouponID string `json:"coupon_id"`
-	UserID   string `json:"user_id"`
-	OrderID  string `json:"order_id"`
-}
-
-func (q *Queries) InsertCouponRedemption(ctx context.Context, arg InsertCouponRedemptionParams) (PaymentsCouponRedemption, error) {
-	row := q.db.QueryRow(ctx, insertCouponRedemption,
-		arg.ID,
-		arg.CouponID,
-		arg.UserID,
-		arg.OrderID,
-	)
-	var i PaymentsCouponRedemption
+func (q *Queries) GetOrderByProviderOrderID(ctx context.Context, providerOrderID *string) (PaymentsOrder, error) {
+	row := q.db.QueryRow(ctx, getOrderByProviderOrderID, providerOrderID)
+	var i PaymentsOrder
 	err := row.Scan(
 		&i.ID,
-		&i.CouponID,
-		&i.UserID,
-		&i.OrderID,
+		&i.BuyerID,
+		&i.TotalPaise,
+		&i.Currency,
+		&i.Status,
+		&i.Provider,
+		&i.ProviderOrderID,
+		&i.BuyerPhone,
+		&i.BuyerEmail,
+		&i.BuyerName,
 		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ExpiresAt,
 	)
 	return i, err
+}
+
+const getOrderItems = `-- name: GetOrderItems :many
+SELECT id, order_id, pass_id, amount_paise, attendee_name, attendee_email, attendee_phone, created_at FROM payments.order_items WHERE order_id = $1
+`
+
+func (q *Queries) GetOrderItems(ctx context.Context, orderID string) ([]PaymentsOrderItem, error) {
+	rows, err := q.db.Query(ctx, getOrderItems, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PaymentsOrderItem
+	for rows.Next() {
+		var i PaymentsOrderItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrderID,
+			&i.PassID,
+			&i.AmountPaise,
+			&i.AttendeeName,
+			&i.AttendeeEmail,
+			&i.AttendeePhone,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const insertIdempotencyKey = `-- name: InsertIdempotencyKey :one
@@ -172,7 +237,7 @@ const markOrderPaid = `-- name: MarkOrderPaid :one
 UPDATE payments.orders
 SET status = 'PAID', provider_order_id = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, pass_id, coupon_id, amount_paise, currency, status, provider, provider_order_id, created_at, updated_at, expires_at
+RETURNING id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at
 `
 
 type MarkOrderPaidParams struct {
@@ -185,14 +250,15 @@ func (q *Queries) MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) (P
 	var i PaymentsOrder
 	err := row.Scan(
 		&i.ID,
-		&i.UserID,
-		&i.PassID,
-		&i.CouponID,
-		&i.AmountPaise,
+		&i.BuyerID,
+		&i.TotalPaise,
 		&i.Currency,
 		&i.Status,
 		&i.Provider,
 		&i.ProviderOrderID,
+		&i.BuyerPhone,
+		&i.BuyerEmail,
+		&i.BuyerName,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExpiresAt,
@@ -200,43 +266,35 @@ func (q *Queries) MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) (P
 	return i, err
 }
 
-const upsertPaymentLock = `-- name: UpsertPaymentLock :one
-INSERT INTO payments.payment_locks (user_id, order_id, expires_at)
-VALUES ($1, $2, $3)
-ON CONFLICT (user_id) DO UPDATE
-    SET order_id = EXCLUDED.order_id, expires_at = EXCLUDED.expires_at
-    WHERE payments.payment_locks.expires_at < now()   -- only steal an expired lock
-RETURNING user_id, order_id, expires_at, created_at
+const updateOrderStatus = `-- name: UpdateOrderStatus :one
+UPDATE payments.orders
+SET status = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at
 `
 
-type UpsertPaymentLockParams struct {
-	UserID    string    `json:"user_id"`
-	OrderID   string    `json:"order_id"`
-	ExpiresAt time.Time `json:"expires_at"`
+type UpdateOrderStatusParams struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
 }
 
-func (q *Queries) UpsertPaymentLock(ctx context.Context, arg UpsertPaymentLockParams) (PaymentsPaymentLock, error) {
-	row := q.db.QueryRow(ctx, upsertPaymentLock, arg.UserID, arg.OrderID, arg.ExpiresAt)
-	var i PaymentsPaymentLock
+func (q *Queries) UpdateOrderStatus(ctx context.Context, arg UpdateOrderStatusParams) (PaymentsOrder, error) {
+	row := q.db.QueryRow(ctx, updateOrderStatus, arg.ID, arg.Status)
+	var i PaymentsOrder
 	err := row.Scan(
-		&i.UserID,
-		&i.OrderID,
-		&i.ExpiresAt,
+		&i.ID,
+		&i.BuyerID,
+		&i.TotalPaise,
+		&i.Currency,
+		&i.Status,
+		&i.Provider,
+		&i.ProviderOrderID,
+		&i.BuyerPhone,
+		&i.BuyerEmail,
+		&i.BuyerName,
 		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ExpiresAt,
 	)
 	return i, err
-}
-
-const userHasPaidPass = `-- name: UserHasPaidPass :one
-SELECT EXISTS (
-    SELECT 1 FROM payments.orders
-    WHERE user_id = $1 AND status = 'PAID'
-) AS has_pass
-`
-
-func (q *Queries) UserHasPaidPass(ctx context.Context, userID string) (bool, error) {
-	row := q.db.QueryRow(ctx, userHasPaidPass, userID)
-	var has_pass bool
-	err := row.Scan(&has_pass)
-	return has_pass, err
 }

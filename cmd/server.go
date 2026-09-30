@@ -1,17 +1,20 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"strings"
+	"net/http"
+	"time"
+
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ky27/backend/internal/config"
-	"ky27/backend/internal/httpapi"
+	"ky27/backend/internal/db"
+	"ky27/backend/internal/order"
 	"ky27/backend/internal/payment"
-
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
 )
 
 func main() {
@@ -20,33 +23,47 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	// Build the selected payment gateway (the Strategy, via the switch factory).
-	gateway, err := payment.NewGateway(cfg.Payment)
+	gateway, err := payment.NewGateway(cfg.Gateway, cfg.GatewayCfg)
 	if err != nil {
-		log.Fatalf("payment: %v", err)
+		log.Fatalf("gateway: %v", err)
 	}
-	log.Printf("payment provider ready: %s", cfg.Payment.Provider)
 
-	app := fiber.New()
-	app.Use(logger.New())
+	poolCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(poolCtx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("db: connect: %v", err)
+	}
+	defer pool.Close()
+	if err := pool.Ping(poolCtx); err != nil {
+		log.Fatalf("db: ping: %v", err)
+	}
+
+	queries := db.New(pool)
+	_ = order.NewService(gateway, queries, cfg.Gateway)
+	// orderSvc will be wired into gRPC in bucket B.
+
+	r := gin.Default()
+
+	// CORS
 	if len(cfg.CorsOrigins) > 0 {
-		app.Use(cors.New(cors.Config{
-			AllowOrigins: strings.Join(cfg.CorsOrigins, ","),
-			AllowHeaders: "Origin, Content-Type, Accept, Authorization",
-			AllowMethods: "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+		r.Use(cors.New(cors.Config{
+			AllowOrigins:     cfg.CorsOrigins,
+			AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+			AllowCredentials: true,
 		}))
 	}
 
-	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"status": "ok", "provider": cfg.Payment.Provider})
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "provider": cfg.Gateway})
 	})
 
-	// Payment routes (handler holds the injected gateway).
-	httpapi.NewHandler(gateway).Register(app)
+	// gRPC service will be added in bucket B.
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	log.Printf("listening on %s", addr)
-	if err := app.Listen(addr); err != nil {
+	log.Printf("listening on %s (provider=%s)", addr, cfg.Gateway)
+	if err := r.Run(addr); err != nil {
 		log.Fatalf("server: %v", err)
 	}
 }
