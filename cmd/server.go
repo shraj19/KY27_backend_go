@@ -5,11 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ky27/backend/internal/config"
 	"ky27/backend/internal/db"
@@ -28,16 +26,11 @@ func main() {
 		log.Fatalf("gateway: %v", err)
 	}
 
-	poolCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	pool, err := pgxpool.New(poolCtx, cfg.DatabaseURL)
+	pool, err := db.Connect(context.Background(), cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("db: connect: %v", err)
+		log.Fatalf("db: %v", err)
 	}
 	defer pool.Close()
-	if err := pool.Ping(poolCtx); err != nil {
-		log.Fatalf("db: ping: %v", err)
-	}
 
 	queries := db.New(pool)
 	_ = order.NewService(gateway, queries, cfg.Gateway)
@@ -45,7 +38,6 @@ func main() {
 
 	r := gin.Default()
 
-	// CORS
 	if len(cfg.CorsOrigins) > 0 {
 		r.Use(cors.New(cors.Config{
 			AllowOrigins:     cfg.CorsOrigins,
