@@ -6,11 +6,11 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
 	"ky27/backend/internal/config"
 	"ky27/backend/internal/db"
+	"ky27/backend/internal/middleware"
 	"ky27/backend/internal/order"
 	"ky27/backend/internal/payment"
 )
@@ -38,13 +38,8 @@ func main() {
 
 	r := gin.Default()
 
-	if len(cfg.CorsOrigins) > 0 {
-		r.Use(cors.New(cors.Config{
-			AllowOrigins:     cfg.CorsOrigins,
-			AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
-			AllowCredentials: true,
-		}))
+	if mw := middleware.CORS(cfg.CorsOrigins); mw != nil {
+		r.Use(mw)
 	}
 
 	r.GET("/health", func(c *gin.Context) {
