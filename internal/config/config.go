@@ -10,9 +10,11 @@ import (
 // Config is the fully-loaded, validated application configuration.
 type Config struct {
 	Port        int      `envconfig:"PORT" default:"8081"`
+	GRPCPort    int      `envconfig:"GRPC_PORT" default:"50051"`
 	CorsOrigins []string `envconfig:"CORS_ORIGINS"`
 	DatabaseURL string   `envconfig:"DATABASE_URL" required:"true"`
 	Gateway     string   `envconfig:"PAYMENT_PROVIDER" required:"true"`
+	ServiceToken string   `envconfig:"SERVICE_TOKEN" required:"true"`
 }
 
 // Load reads .env (if present), then populates Config from environment.

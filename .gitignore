@@ -113,3 +113,6 @@ Session.vim
 *.orig
 node_modules/
 .env.enc
+
+# TLS certs (dev)
+certs/

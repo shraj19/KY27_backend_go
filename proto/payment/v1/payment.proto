@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package payment.v1;
+
+option go_package = "ky27/backend/gen/payment/v1;paymentv1";
+
+// PaymentService handles payment order creation for the KY27 fest.
+// Called by Node backend with pre-priced orders.
+service PaymentService {
+  // CreatePayment creates a payment order and returns a session ID
+  // for redirecting the user to the payment gateway.
+  rpc CreatePayment(CreatePaymentRequest) returns (CreatePaymentResponse);
+
+  // GetPaymentStatus returns the current status of a payment order.
+  rpc GetPaymentStatus(GetPaymentStatusRequest) returns (GetPaymentStatusResponse);
+}
+
+// -----------------------------------------------------------------------------
+// CreatePayment
+// -----------------------------------------------------------------------------
+
+message CreatePaymentRequest {
+  string order_id = 1;         // Optional. If empty, Go generates one.
+  Buyer buyer = 2;
+  repeated Item items = 3;     // Cart: N tickets for N attendees
+  int64 total_paise = 4;       // Trusted total from Node
+  string currency = 5;         // Default: INR
+  string idempotency_key = 6;  // Required for retry safety
+}
+
+message Buyer {
+  string id = 1;
+  string phone = 2;
+  string email = 3;
+  string name = 4;
+}
+
+message Item {
+  string pass_id = 1;
+  int64 amount_paise = 2;
+  string attendee_name = 3;
+  string attendee_email = 4;
+  string attendee_phone = 5;
+}
+
+message CreatePaymentResponse {
+  string order_id = 1;
+  string payment_session_id = 2;  // For redirecting to gateway checkout
+  PaymentStatus status = 3;
+}
+
+// -----------------------------------------------------------------------------
+// GetPaymentStatus
+// -----------------------------------------------------------------------------
+
+message GetPaymentStatusRequest {
+  string order_id = 1;
+}
+
+message GetPaymentStatusResponse {
+  string order_id = 1;
+  PaymentStatus status = 2;
+}
+
+// -----------------------------------------------------------------------------
+// Common
+// -----------------------------------------------------------------------------
+
+enum PaymentStatus {
+  PAYMENT_STATUS_UNSPECIFIED = 0;
+  PAYMENT_STATUS_ACTIVE = 1;
+  PAYMENT_STATUS_PAID = 2;
+  PAYMENT_STATUS_EXPIRED = 3;
+  PAYMENT_STATUS_FAILED = 4;
+}
