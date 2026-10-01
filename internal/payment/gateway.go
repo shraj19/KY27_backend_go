@@ -2,7 +2,6 @@ package payment
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
@@ -46,39 +45,4 @@ type PaymentGateway interface {
 	CreateOrder(ctx context.Context, o Order) (CreatedOrder, error)
 	VerifyPayment(ctx context.Context, orderID string) (Status, error)
 	OrderExpiry() time.Duration
-}
-
-// ProviderFactory creates a PaymentGateway from a generic config map.
-// Each provider registers its factory; the central config loader calls it.
-type ProviderFactory func(cfg map[string]string) (PaymentGateway, error)
-
-// registry holds registered provider factories. Open/Closed: add providers
-// by calling Register, not by modifying this file.
-var registry = map[string]ProviderFactory{}
-
-// Register adds a provider factory. Called by each provider's init().
-func Register(name string, factory ProviderFactory) {
-	if _, exists := registry[name]; exists {
-		panic(fmt.Sprintf("payment: provider %q already registered", name))
-	}
-	registry[name] = factory
-}
-
-// NewGateway creates the gateway for the named provider using the given config.
-// The config map contains provider-specific key-value pairs.
-func NewGateway(provider string, cfg map[string]string) (PaymentGateway, error) {
-	factory, ok := registry[provider]
-	if !ok {
-		return nil, fmt.Errorf("payment: unknown provider %q", provider)
-	}
-	return factory(cfg)
-}
-
-// RegisteredProviders returns the names of all registered providers.
-func RegisteredProviders() []string {
-	names := make([]string, 0, len(registry))
-	for name := range registry {
-		names = append(names, name)
-	}
-	return names
 }

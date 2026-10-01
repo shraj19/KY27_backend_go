@@ -21,7 +21,7 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	gateway, err := payment.NewGateway(cfg.Gateway, cfg.GatewayCfg)
+	gateway, err := newGateway(cfg.Gateway)
 	if err != nil {
 		log.Fatalf("gateway: %v", err)
 	}
@@ -52,5 +52,15 @@ func main() {
 	log.Printf("listening on %s (provider=%s)", addr, cfg.Gateway)
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("server: %v", err)
+	}
+}
+
+// newGateway constructs a payment gateway based on provider name.
+func newGateway(provider string) (payment.PaymentGateway, error) {
+	switch provider {
+	case "cashfree":
+		return payment.NewCashfreeProvider(config.LoadCashfreeConfig())
+	default:
+		return nil, fmt.Errorf("unknown payment provider: %s", provider)
 	}
 }
