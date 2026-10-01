@@ -2,6 +2,7 @@ package payment
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -112,6 +113,22 @@ func (p *cashfreeProvider) VerifyPayment(ctx context.Context, orderID string) (S
 	return mapCashfreeStatus(derefStr(resp.OrderStatus)), nil
 }
 
+func (p *cashfreeProvider) VerifyWebhook(signature string, body []byte, timestamp string) (WebhookEvent, error) {
+	// Use Cashfree SDK to verify signature
+	webhookEvent, err := p.client.PGVerifyWebhookSignature(signature, string(body), timestamp)
+	if err != nil {
+		return WebhookEvent{}, fmt.Errorf("cashfree: invalid webhook signature: %w", err)
+	}
+
+	// Parse the webhook payload
+	event, err := parseCashfreeWebhook(webhookEvent, body)
+	if err != nil {
+		return WebhookEvent{}, fmt.Errorf("cashfree: parse webhook: %w", err)
+	}
+
+	return event, nil
+}
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
@@ -136,4 +153,47 @@ func derefStr(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// cashfreeWebhookPayload represents the Cashfree webhook structure.
+type cashfreeWebhookPayload struct {
+	Data struct {
+		Order struct {
+			OrderID     string  `json:"order_id"`
+			OrderAmount float64 `json:"order_amount"`
+			OrderStatus string  `json:"order_status"`
+		} `json:"order"`
+		Payment struct {
+			PaymentTime string `json:"payment_time"`
+		} `json:"payment"`
+	} `json:"data"`
+	EventTime string `json:"event_time"`
+	Type      string `json:"type"`
+}
+
+func parseCashfreeWebhook(webhookEvent interface{}, body []byte) (WebhookEvent, error) {
+	var payload cashfreeWebhookPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return WebhookEvent{}, fmt.Errorf("unmarshal webhook: %w", err)
+	}
+
+	// Parse payment time
+	var paidAt time.Time
+	if payload.Data.Payment.PaymentTime != "" {
+		t, err := time.Parse(time.RFC3339, payload.Data.Payment.PaymentTime)
+		if err == nil {
+			paidAt = t
+		}
+	}
+
+	// Convert amount from rupees to paise
+	amountPaise := int64(payload.Data.Order.OrderAmount * 100)
+
+	return WebhookEvent{
+		OrderID:     payload.Data.Order.OrderID,
+		Status:      mapCashfreeStatus(payload.Data.Order.OrderStatus),
+		AmountPaise: amountPaise,
+		PaidAt:      paidAt,
+		RawPayload:  body,
+	}, nil
 }

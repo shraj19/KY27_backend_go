@@ -40,9 +40,24 @@ type CreatedOrder struct {
 	Status           Status
 }
 
+// WebhookEvent is the parsed result of a payment webhook.
+type WebhookEvent struct {
+	OrderID     string
+	Status      Status
+	AmountPaise int64
+	PaidAt      time.Time
+	RawPayload  []byte // Original payload for audit
+}
+
 // PaymentGateway abstracts a payment provider.
 type PaymentGateway interface {
 	CreateOrder(ctx context.Context, o Order) (CreatedOrder, error)
 	VerifyPayment(ctx context.Context, orderID string) (Status, error)
 	OrderExpiry() time.Duration
+
+	// VerifyWebhook validates the webhook signature and parses the event.
+	// signature is the value from the gateway's signature header.
+	// body is the raw request body.
+	// timestamp is the webhook timestamp header (if required by gateway).
+	VerifyWebhook(signature string, body []byte, timestamp string) (WebhookEvent, error)
 }
