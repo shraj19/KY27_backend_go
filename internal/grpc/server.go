@@ -59,8 +59,15 @@ func (s *PaymentServer) GetPaymentStatus(ctx context.Context, req *pb.GetPayment
 		return nil, status.Error(codes.InvalidArgument, "order_id is required")
 	}
 
-	// TODO: implement when order.Service has GetStatus method
-	return nil, status.Error(codes.Unimplemented, "not implemented")
+	st, err := s.orderSvc.GetStatus(ctx, req.OrderId)
+	if err != nil {
+		return nil, status.Error(codes.NotFound, "order not found")
+	}
+
+	return &pb.GetPaymentStatusResponse{
+		OrderId: req.OrderId,
+		Status:  toProtoStatus(st),
+	}, nil
 }
 
 // -----------------------------------------------------------------------------

@@ -6,6 +6,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
@@ -44,25 +48,50 @@ func main() {
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
-	defer pool.Close()
 
 	queries := db.New(pool)
 	orderSvc := order.NewService(gateway, queries, cfg.Gateway)
 
-	// Set up River job queue
 	riverClient, err := setupRiver(context.Background(), pool, cfg.NodeWebhookURL, cfg.ServiceToken)
 	if err != nil {
 		log.Fatalf("river: %v", err)
 	}
-	defer riverClient.Stop(context.Background())
 
-	// Start gRPC server in background
+	// Start servers
 	grpcAddr := fmt.Sprintf(":%d", cfg.GRPCPort)
-	go runGRPC(grpcAddr, orderSvc, cfg.ServiceToken)
+	grpcSrv := startGRPC(grpcAddr, orderSvc, cfg.ServiceToken)
 
-	// Start HTTP server (health + webhooks)
 	httpAddr := fmt.Sprintf(":%d", cfg.Port)
-	runHTTP(httpAddr, cfg, gateway, queries, riverClient)
+	httpSrv := startHTTP(httpAddr, cfg, gateway, queries, riverClient)
+
+	// Wait for shutdown signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("shutting down...")
+
+	// Graceful shutdown with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Stop HTTP server
+	if err := httpSrv.Shutdown(ctx); err != nil {
+		log.Printf("http shutdown: %v", err)
+	}
+
+	// Stop gRPC server
+	grpcSrv.GracefulStop()
+
+	// Stop River workers
+	if err := riverClient.Stop(ctx); err != nil {
+		log.Printf("river shutdown: %v", err)
+	}
+
+	// Close database
+	pool.Close()
+
+	log.Println("shutdown complete")
 }
 
 func setupRiver(ctx context.Context, pool *pgxpool.Pool, nodeWebhookURL, serviceToken string) (*river.Client[pgx.Tx], error) {
@@ -87,7 +116,7 @@ func setupRiver(ctx context.Context, pool *pgxpool.Pool, nodeWebhookURL, service
 	return riverClient, nil
 }
 
-func runGRPC(addr string, orderSvc *order.Service, token string) {
+func startGRPC(addr string, orderSvc *order.Service, token string) *grpc.Server {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("grpc: listen: %v", err)
@@ -105,13 +134,17 @@ func runGRPC(addr string, orderSvc *order.Service, token string) {
 	pb.RegisterPaymentServiceServer(srv, grpcserver.NewPaymentServer(orderSvc))
 	reflection.Register(srv)
 
-	log.Printf("gRPC listening on %s", addr)
-	if err := srv.Serve(lis); err != nil {
-		log.Fatalf("grpc: serve: %v", err)
-	}
+	go func() {
+		log.Printf("gRPC listening on %s", addr)
+		if err := srv.Serve(lis); err != nil {
+			log.Printf("grpc: serve: %v", err)
+		}
+	}()
+
+	return srv
 }
 
-func runHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, q *db.Queries, rc *river.Client[pgx.Tx]) {
+func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, q *db.Queries, rc *river.Client[pgx.Tx]) *http.Server {
 	r := gin.Default()
 
 	if mw := middleware.CORS(cfg.CorsOrigins); mw != nil {
@@ -122,16 +155,24 @@ func runHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, q *db.Qu
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "provider": cfg.Gateway})
 	})
 
-	// Register webhook routes (one per gateway)
 	webhookHandler := webhook.NewHandler(q, rc)
 	webhookHandler.RegisterRoutes(r, map[string]payment.PaymentGateway{
-		cfg.Gateway: gw, // Register the active gateway
+		cfg.Gateway: gw,
 	})
 
-	log.Printf("HTTP listening on %s (provider=%s)", addr, cfg.Gateway)
-	if err := r.Run(addr); err != nil {
-		log.Fatalf("http: %v", err)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: r,
 	}
+
+	go func() {
+		log.Printf("HTTP listening on %s (provider=%s)", addr, cfg.Gateway)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("http: %v", err)
+		}
+	}()
+
+	return srv
 }
 
 func newGateway(provider string) (payment.PaymentGateway, error) {

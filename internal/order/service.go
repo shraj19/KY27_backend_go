@@ -167,3 +167,12 @@ func hashRequest(r Request) string {
 	sum := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(sum[:])
 }
+
+// GetStatus returns the current status of an order.
+func (s *Service) GetStatus(ctx context.Context, orderID string) (payment.Status, error) {
+	order, err := s.queries.GetOrder(ctx, orderID)
+	if err != nil {
+		return payment.StatusUnknown, fmt.Errorf("order: get status: %w", err)
+	}
+	return payment.Status(order.Status), nil
+}
