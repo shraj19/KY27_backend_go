@@ -3,9 +3,6 @@ FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
-# Install ca-certificates for HTTPS
-RUN apk add --no-cache ca-certificates
-
 # Copy go mod files first for caching
 COPY go.mod go.sum ./
 RUN go mod download
@@ -14,15 +11,16 @@ RUN go mod download
 COPY . .
 
 # Build binary
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server ./cmd
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/server ./cmd
 
 # Runtime stage
 FROM alpine:3.19
 
 WORKDIR /app
 
-# Install ca-certificates for HTTPS calls to payment gateways
-RUN apk add --no-cache ca-certificates
+# ca-certificates: verify HTTPS to Cashfree API
+# tzdata: proper timezone handling for payment timestamps
+RUN apk add --no-cache ca-certificates tzdata
 
 # Copy binary from builder
 COPY --from=builder /app/server /app/server
@@ -33,6 +31,10 @@ COPY --from=builder /app/migrations /app/migrations
 # Don't run as root
 RUN adduser -D -u 1000 appuser
 USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget -qO- http://localhost:8081/health || exit 1
 
 EXPOSE 8081 50051
 
