@@ -51,9 +51,19 @@ func (m *mockGateway) OrderExpiry() time.Duration {
 
 func (m *mockGateway) WebhookHeaders() payment.WebhookHeaders {
 	return payment.WebhookHeaders{
-		Signature: "x-webhook-signature",
-		Timestamp: "x-webhook-timestamp",
+		Signature: "x-test-signature",
+		Timestamp: "x-test-timestamp",
 	}
+}
+
+func (m *mockGateway) VerifyWebhook(signature string, body []byte, timestamp string) (payment.WebhookEvent, error) {
+	return payment.WebhookEvent{
+		OrderID:     "test-order",
+		Status:      payment.StatusPaid,
+		AmountPaise: 10000,
+		PaidAt:      time.Now(),
+		RawPayload:  body,
+	}, nil
 }
 
 
