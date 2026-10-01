@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 
 	"ky27/backend/internal/db"
@@ -18,14 +19,16 @@ import (
 
 // Handler handles payment gateway webhooks.
 type Handler struct {
-	queries     *db.Queries
+	pool        *pgxpool.Pool // for regular queries (pooled connection)
+	riverPool   *pgxpool.Pool // for River transactions (direct connection)
 	riverClient *river.Client[pgx.Tx]
 }
 
 // NewHandler creates a webhook handler.
-func NewHandler(q *db.Queries, rc *river.Client[pgx.Tx]) *Handler {
+func NewHandler(pool, riverPool *pgxpool.Pool, rc *river.Client[pgx.Tx]) *Handler {
 	return &Handler{
-		queries:     q,
+		pool:        pool,
+		riverPool:   riverPool,
 		riverClient: rc,
 	}
 }
@@ -88,20 +91,37 @@ func (h *Handler) processPaymentEvent(ctx context.Context, event payment.Webhook
 		return nil
 	}
 
-	if _, err := h.queries.MarkOrderPaid(ctx, db.MarkOrderPaidParams{
+	// Use transaction for atomic DB update + job enqueue
+	// Must use riverPool (direct connection) for River's InsertTx
+	tx, err := h.riverPool.Begin(ctx)
+	if err != nil {
+		log.Printf("webhook: begin tx failed: %v", err)
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	queries := db.New(tx)
+	if _, err := queries.MarkOrderPaid(ctx, db.MarkOrderPaidParams{
 		ID:              event.OrderID,
 		ProviderOrderID: nil,
 	}); err != nil {
+		log.Printf("webhook: mark order paid failed: %v", err)
 		return err
 	}
 
-	_, err := h.riverClient.Insert(ctx, jobs.NotifyNodeArgs{
+	_, err = h.riverClient.InsertTx(ctx, tx, jobs.NotifyNodeArgs{
 		OrderID:     event.OrderID,
 		Status:      string(event.Status),
 		AmountPaise: event.AmountPaise,
 		PaidAt:      event.PaidAt.Format(time.RFC3339),
 	}, nil)
 	if err != nil {
+		log.Printf("webhook: insert job failed: %v", err)
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		log.Printf("webhook: commit failed: %v", err)
 		return err
 	}
 

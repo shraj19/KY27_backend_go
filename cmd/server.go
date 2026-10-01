@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,10 +50,17 @@ func main() {
 		log.Fatalf("db: %v", err)
 	}
 
+	// River needs direct (non-pooled) connection for LISTEN/NOTIFY
+	directURL := strings.Replace(cfg.DatabaseURL, "-pooler", "", 1)
+	riverPool, err := db.ConnectDirect(context.Background(), directURL)
+	if err != nil {
+		log.Fatalf("db (river): %v", err)
+	}
+
 	queries := db.New(pool)
 	orderSvc := order.NewService(gateway, queries, cfg.Gateway)
 
-	riverClient, err := setupRiver(context.Background(), pool, cfg.NodeWebhookURL, cfg.ServiceToken)
+	riverClient, err := setupRiver(context.Background(), riverPool, cfg.NodeWebhookURL, cfg.ServiceToken)
 	if err != nil {
 		log.Fatalf("river: %v", err)
 	}
@@ -62,7 +70,7 @@ func main() {
 	grpcSrv := startGRPC(grpcAddr, orderSvc, cfg.ServiceToken)
 
 	httpAddr := fmt.Sprintf(":%d", cfg.Port)
-	httpSrv := startHTTP(httpAddr, cfg, gateway, queries, riverClient)
+	httpSrv := startHTTP(httpAddr, cfg, gateway, pool, riverPool, riverClient)
 
 	// Wait for shutdown signal
 	quit := make(chan os.Signal, 1)
@@ -90,6 +98,7 @@ func main() {
 
 	// Close database
 	pool.Close()
+	riverPool.Close()
 
 	log.Println("shutdown complete")
 }
@@ -144,7 +153,7 @@ func startGRPC(addr string, orderSvc *order.Service, token string) *grpc.Server 
 	return srv
 }
 
-func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, q *db.Queries, rc *river.Client[pgx.Tx]) *http.Server {
+func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, pool, riverPool *pgxpool.Pool, rc *river.Client[pgx.Tx]) *http.Server {
 	r := gin.Default()
 
 	if mw := middleware.CORS(cfg.CorsOrigins); mw != nil {
@@ -155,7 +164,7 @@ func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, q *db.
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "provider": cfg.Gateway})
 	})
 
-	webhookHandler := webhook.NewHandler(q, rc)
+	webhookHandler := webhook.NewHandler(pool, riverPool, rc)
 	webhookHandler.RegisterRoutes(r, map[string]payment.PaymentGateway{
 		cfg.Gateway: gw,
 	})
