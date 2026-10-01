@@ -140,12 +140,18 @@ func (p *cashfreeProvider) VerifyWebhook(signature string, body []byte, timestam
 // Helpers
 // -----------------------------------------------------------------------------
 
+// Cashfree webhook payment_status values (from API docs)
 var cashfreeStatusMap = map[string]Status{
-	"PAID":                   StatusPaid,
-	"ACTIVE":                 StatusActive,
-	"EXPIRED":                StatusExpired,
-	"TERMINATED":             StatusFailed,
-	"TERMINATION_REQUESTED":  StatusFailed,
+	// Webhook payment_status values
+	"SUCCESS":      StatusPaid,
+	"FAILED":       StatusFailed,
+	"USER_DROPPED": StatusFailed, // User abandoned payment flow
+	// Order status values (from GetOrder API)
+	"PAID":                  StatusPaid,
+	"ACTIVE":                StatusActive,
+	"EXPIRED":               StatusExpired,
+	"TERMINATED":            StatusFailed,
+	"TERMINATION_REQUESTED": StatusFailed,
 }
 
 func mapCashfreeStatus(s string) Status {
@@ -163,6 +169,7 @@ func derefStr(s *string) string {
 }
 
 // cashfreeWebhookPayload represents the Cashfree webhook structure.
+// Based on: https://www.cashfree.com/docs/api-reference/payments/latest/payments/webhooks
 type cashfreeWebhookPayload struct {
 	Data struct {
 		Order struct {
@@ -171,11 +178,15 @@ type cashfreeWebhookPayload struct {
 			OrderStatus string  `json:"order_status"`
 		} `json:"order"`
 		Payment struct {
-			PaymentTime string `json:"payment_time"`
+			CFPaymentID   string  `json:"cf_payment_id"`
+			PaymentStatus string  `json:"payment_status"`
+			PaymentAmount float64 `json:"payment_amount"`
+			PaymentTime   string  `json:"payment_time"`
+			BankReference string  `json:"bank_reference"`
 		} `json:"payment"`
 	} `json:"data"`
 	EventTime string `json:"event_time"`
-	Type      string `json:"type"`
+	Type      string `json:"type"` // PAYMENT_SUCCESS_WEBHOOK, PAYMENT_FAILED_WEBHOOK, etc.
 }
 
 func parseCashfreeWebhook(webhookEvent interface{}, body []byte) (WebhookEvent, error) {
@@ -194,11 +205,22 @@ func parseCashfreeWebhook(webhookEvent interface{}, body []byte) (WebhookEvent, 
 	}
 
 	// Convert amount from rupees to paise
-	amountPaise := int64(payload.Data.Order.OrderAmount * 100)
+	// Use payment_amount (actual paid) with fallback to order_amount
+	amount := payload.Data.Payment.PaymentAmount
+	if amount == 0 {
+		amount = payload.Data.Order.OrderAmount
+	}
+	amountPaise := int64(amount * 100)
+
+	// Use payment_status from payment object (webhook sends SUCCESS, not PAID)
+	status := payload.Data.Payment.PaymentStatus
+	if status == "" {
+		status = payload.Data.Order.OrderStatus // fallback to order status
+	}
 
 	return WebhookEvent{
 		OrderID:     payload.Data.Order.OrderID,
-		Status:      mapCashfreeStatus(payload.Data.Order.OrderStatus),
+		Status:      mapCashfreeStatus(status),
 		AmountPaise: amountPaise,
 		PaidAt:      paidAt,
 		RawPayload:  body,
