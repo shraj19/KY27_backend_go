@@ -10,6 +10,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/reflection"
+
+	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
 
 	pb "ky27/backend/gen/payment/v1"
 	"ky27/backend/internal/config"
@@ -62,9 +65,10 @@ func runGRPC(addr string, orderSvc *order.Service, token string) {
 
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
-		grpc.UnaryInterceptor(middleware.AuthUnaryInterceptor(token)),
+		grpc.UnaryInterceptor(auth.UnaryServerInterceptor(middleware.AuthInterceptor(token))),
 	)
 	pb.RegisterPaymentServiceServer(srv, grpcserver.NewPaymentServer(orderSvc))
+	reflection.Register(srv) // Enable reflection for grpcurl/testing
 
 	log.Printf("gRPC listening on %s", addr)
 	if err := srv.Serve(lis); err != nil {

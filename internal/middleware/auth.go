@@ -2,35 +2,25 @@ package middleware
 
 import (
 	"context"
-	"strings"
 
-	"google.golang.org/grpc"
+	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
-// AuthUnaryInterceptor returns a gRPC unary interceptor that checks for a valid JWT in the "authorization" metadata.
-func AuthUnaryInterceptor(validToken string) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		// Get metadata from context
-		md, ok := metadata.FromIncomingContext(ctx)
-		if !ok {
-			return nil, status.Error(codes.Unauthenticated, "missing metadata")
+// AuthInterceptor returns a gRPC unary interceptor using the grpc-middleware library.
+func AuthInterceptor(validToken string) auth.AuthFunc {
+	return func(ctx context.Context) (context.Context, error) {
+		token, err := auth.AuthFromMD(ctx, "bearer")
+		if err != nil {
+			return nil, status.Error(codes.Unauthenticated, "missing or invalid authorization header")
 		}
 
-		// Get the "authorization" header from metadata
-		authHeaders := md.Get("authorization")
-		if len(authHeaders) == 0 {
-			return nil, status.Error(codes.Unauthenticated, "missing authorization header")
-		}
-
-		// Check if the token matches the valid token with format "Bearer <validToken>"
-		token := strings.TrimPrefix(authHeaders[0], "Bearer ")
 		if token != validToken {
 			return nil, status.Error(codes.Unauthenticated, "invalid token")
 		}
 
-		return handler(ctx, req)
+		// Token valid — return context (can add user info to ctx here)
+		return ctx, nil
 	}
 }
