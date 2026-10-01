@@ -50,7 +50,7 @@ func main() {
 	orderSvc := order.NewService(gateway, queries, cfg.Gateway)
 
 	// Set up River job queue
-	riverClient, err := setupRiver(context.Background(), pool, cfg.NodeWebhookURL)
+	riverClient, err := setupRiver(context.Background(), pool, cfg.NodeWebhookURL, cfg.ServiceToken)
 	if err != nil {
 		log.Fatalf("river: %v", err)
 	}
@@ -65,9 +65,9 @@ func main() {
 	runHTTP(httpAddr, cfg, gateway, queries, riverClient)
 }
 
-func setupRiver(ctx context.Context, pool *pgxpool.Pool, nodeWebhookURL string) (*river.Client[pgx.Tx], error) {
+func setupRiver(ctx context.Context, pool *pgxpool.Pool, nodeWebhookURL, serviceToken string) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
-	river.AddWorker(workers, jobs.NewNotifyNodeWorker(nodeWebhookURL))
+	river.AddWorker(workers, jobs.NewNotifyNodeWorker(nodeWebhookURL, serviceToken))
 
 	riverClient, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Queues: map[string]river.QueueConfig{

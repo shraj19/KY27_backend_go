@@ -33,13 +33,16 @@ func (NotifyNodeArgs) Kind() string { return "notify_node" }
 type NotifyNodeWorker struct {
 	river.WorkerDefaults[NotifyNodeArgs]
 	nodeWebhookURL string
+	serviceToken   string
 	httpClient     *http.Client
 }
 
 // NewNotifyNodeWorker creates a worker that posts to the given Node URL.
-func NewNotifyNodeWorker(nodeWebhookURL string) *NotifyNodeWorker {
+// The serviceToken is sent as "Authorization: Bearer <token>" for auth.
+func NewNotifyNodeWorker(nodeWebhookURL, serviceToken string) *NotifyNodeWorker {
 	return &NotifyNodeWorker{
 		nodeWebhookURL: nodeWebhookURL,
+		serviceToken:   serviceToken,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -57,6 +60,7 @@ func (w *NotifyNodeWorker) Work(ctx context.Context, job *river.Job[NotifyNodeAr
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+w.serviceToken)
 
 	resp, err := w.httpClient.Do(req)
 	if err != nil {
