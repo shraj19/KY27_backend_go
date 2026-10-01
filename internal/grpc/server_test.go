@@ -49,6 +49,14 @@ func (m *mockGateway) OrderExpiry() time.Duration {
 	return 30 * time.Minute
 }
 
+func (m *mockGateway) WebhookHeaders() payment.WebhookHeaders {
+	return payment.WebhookHeaders{
+		Signature: "x-webhook-signature",
+		Timestamp: "x-webhook-timestamp",
+	}
+}
+
+
 // mockQueries implements the db methods needed by order.Service.
 type mockQueries struct{}
 

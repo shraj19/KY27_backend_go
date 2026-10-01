@@ -122,9 +122,11 @@ func runHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, q *db.Qu
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "provider": cfg.Gateway})
 	})
 
-	// Register webhook routes
-	webhookHandler := webhook.NewHandler(gw, q, rc)
-	webhookHandler.RegisterRoutes(r)
+	// Register webhook routes (one per gateway)
+	webhookHandler := webhook.NewHandler(q, rc)
+	webhookHandler.RegisterRoutes(r, map[string]payment.PaymentGateway{
+		cfg.Gateway: gw, // Register the active gateway
+	})
 
 	log.Printf("HTTP listening on %s (provider=%s)", addr, cfg.Gateway)
 	if err := r.Run(addr); err != nil {

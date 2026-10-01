@@ -66,6 +66,13 @@ func (p *cashfreeProvider) OrderExpiry() time.Duration {
 	return cashfreeOrderExpiry
 }
 
+func (p *cashfreeProvider) WebhookHeaders() WebhookHeaders {
+	return WebhookHeaders{
+		Signature: "x-webhook-signature",
+		Timestamp: "x-webhook-timestamp",
+	}
+}
+
 func (p *cashfreeProvider) CreateOrder(ctx context.Context, o Order) (CreatedOrder, error) {
 	currency := o.Currency
 	if currency == "" {

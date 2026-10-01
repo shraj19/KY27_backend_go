@@ -49,15 +49,21 @@ type WebhookEvent struct {
 	RawPayload  []byte // Original payload for audit
 }
 
+// WebhookHeaders defines which HTTP headers contain signature data.
+type WebhookHeaders struct {
+	Signature string // Header name for signature (required)
+	Timestamp string // Header name for timestamp (empty if not used)
+}
+
 // PaymentGateway abstracts a payment provider.
 type PaymentGateway interface {
 	CreateOrder(ctx context.Context, o Order) (CreatedOrder, error)
 	VerifyPayment(ctx context.Context, orderID string) (Status, error)
 	OrderExpiry() time.Duration
 
+	// WebhookHeaders returns the header names this provider uses for webhooks.
+	WebhookHeaders() WebhookHeaders
+
 	// VerifyWebhook validates the webhook signature and parses the event.
-	// signature is the value from the gateway's signature header.
-	// body is the raw request body.
-	// timestamp is the webhook timestamp header (if required by gateway).
 	VerifyWebhook(signature string, body []byte, timestamp string) (WebhookEvent, error)
 }
