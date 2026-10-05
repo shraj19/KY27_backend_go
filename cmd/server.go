@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -28,6 +28,7 @@ import (
 	"ky27/backend/internal/db"
 	grpcserver "ky27/backend/internal/grpc"
 	"ky27/backend/internal/jobs"
+	"ky27/backend/internal/logger"
 	"ky27/backend/internal/middleware"
 	"ky27/backend/internal/order"
 	"ky27/backend/internal/payment"
@@ -37,24 +38,29 @@ import (
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		slog.Error("config load failed", "err", err)
+		os.Exit(1)
 	}
+
+	logger.Init(cfg)
 
 	gateway, err := newGateway(cfg.Gateway)
 	if err != nil {
-		log.Fatalf("gateway: %v", err)
+		slog.Error("gateway init failed", "err", err)
+		os.Exit(1)
 	}
 
 	pool, err := db.Connect(context.Background(), cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("db: %v", err)
+		slog.Error("db connect failed", "err", err)
+		os.Exit(1)
 	}
 
-	// River needs direct (non-pooled) connection for LISTEN/NOTIFY
 	directURL := strings.Replace(cfg.DatabaseURL, "-pooler", "", 1)
 	riverPool, err := db.ConnectDirect(context.Background(), directURL)
 	if err != nil {
-		log.Fatalf("db (river): %v", err)
+		slog.Error("db connect (river) failed", "err", err)
+		os.Exit(1)
 	}
 
 	queries := db.New(pool)
@@ -62,45 +68,39 @@ func main() {
 
 	riverClient, err := setupRiver(context.Background(), riverPool, cfg.NodeWebhookURL, cfg.ServiceToken)
 	if err != nil {
-		log.Fatalf("river: %v", err)
+		slog.Error("river init failed", "err", err)
+		os.Exit(1)
 	}
 
-	// Start servers
 	grpcAddr := fmt.Sprintf(":%d", cfg.GRPCPort)
 	grpcSrv := startGRPC(grpcAddr, orderSvc, cfg.ServiceToken)
 
 	httpAddr := fmt.Sprintf(":%d", cfg.Port)
 	httpSrv := startHTTP(httpAddr, cfg, gateway, pool, riverPool, riverClient)
 
-	// Wait for shutdown signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("shutting down...")
+	slog.Info("shutting down")
 
-	// Graceful shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Stop HTTP server
 	if err := httpSrv.Shutdown(ctx); err != nil {
-		log.Printf("http shutdown: %v", err)
+		slog.Error("http shutdown failed", "err", err)
 	}
 
-	// Stop gRPC server
 	grpcSrv.GracefulStop()
 
-	// Stop River workers
 	if err := riverClient.Stop(ctx); err != nil {
-		log.Printf("river shutdown: %v", err)
+		slog.Error("river shutdown failed", "err", err)
 	}
 
-	// Close database
 	pool.Close()
 	riverPool.Close()
 
-	log.Println("shutdown complete")
+	slog.Info("shutdown complete")
 }
 
 func setupRiver(ctx context.Context, pool *pgxpool.Pool, nodeWebhookURL, serviceToken string) (*river.Client[pgx.Tx], error) {
@@ -121,19 +121,21 @@ func setupRiver(ctx context.Context, pool *pgxpool.Pool, nodeWebhookURL, service
 		return nil, fmt.Errorf("start client: %w", err)
 	}
 
-	log.Println("river: job queue started")
+	slog.Info("river started")
 	return riverClient, nil
 }
 
 func startGRPC(addr string, orderSvc *order.Service, token string) *grpc.Server {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatalf("grpc: listen: %v", err)
+		slog.Error("grpc listen failed", "err", err, "addr", addr)
+		os.Exit(1)
 	}
 
 	creds, err := credentials.NewServerTLSFromFile("certs/server.crt", "certs/server.key")
 	if err != nil {
-		log.Fatalf("grpc: load TLS certs: %v", err)
+		slog.Error("grpc tls load failed", "err", err)
+		os.Exit(1)
 	}
 
 	srv := grpc.NewServer(
@@ -144,9 +146,9 @@ func startGRPC(addr string, orderSvc *order.Service, token string) *grpc.Server 
 	reflection.Register(srv)
 
 	go func() {
-		log.Printf("gRPC listening on %s", addr)
+		slog.Info("grpc listening", "addr", addr)
 		if err := srv.Serve(lis); err != nil {
-			log.Printf("grpc: serve: %v", err)
+			slog.Error("grpc serve failed", "err", err)
 		}
 	}()
 
@@ -175,9 +177,9 @@ func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, pool, 
 	}
 
 	go func() {
-		log.Printf("HTTP listening on %s (provider=%s)", addr, cfg.Gateway)
+		slog.Info("http listening", "addr", addr, "provider", cfg.Gateway)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("http: %v", err)
+			slog.Error("http serve failed", "err", err)
 		}
 	}()
 

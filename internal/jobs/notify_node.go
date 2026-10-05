@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -64,14 +65,16 @@ func (w *NotifyNodeWorker) Work(ctx context.Context, job *river.Job[NotifyNodeAr
 
 	resp, err := w.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("post to node: %w", err) // River will retry
+		slog.Warn("node notify failed", "err", err, "order_id", job.Args.OrderID, "attempt", job.Attempt)
+		return fmt.Errorf("post to node: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil // Success
+		slog.Info("node notified", "order_id", job.Args.OrderID, "status_code", resp.StatusCode)
+		return nil
 	}
 
-	// Non-2xx = retry
+	slog.Warn("node returned error", "order_id", job.Args.OrderID, "status_code", resp.StatusCode, "attempt", job.Attempt)
 	return fmt.Errorf("node returned status %d", resp.StatusCode)
 }

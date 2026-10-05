@@ -189,7 +189,7 @@ type cashfreeWebhookPayload struct {
 	Type      string `json:"type"` // PAYMENT_SUCCESS_WEBHOOK, PAYMENT_FAILED_WEBHOOK, etc.
 }
 
-func parseCashfreeWebhook(webhookEvent interface{}, body []byte) (WebhookEvent, error) {
+func parseCashfreeWebhook(webhookEvent any, body []byte) (WebhookEvent, error) {
 	var payload cashfreeWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return WebhookEvent{}, fmt.Errorf("unmarshal webhook: %w", err)

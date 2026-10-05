@@ -3,7 +3,7 @@ package webhook
 import (
 	"context"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -17,14 +17,12 @@ import (
 	"ky27/backend/internal/payment"
 )
 
-// Handler handles payment gateway webhooks.
 type Handler struct {
-	pool        *pgxpool.Pool // for regular queries (pooled connection)
-	riverPool   *pgxpool.Pool // for River transactions (direct connection)
+	pool        *pgxpool.Pool
+	riverPool   *pgxpool.Pool
 	riverClient *river.Client[pgx.Tx]
 }
 
-// NewHandler creates a webhook handler.
 func NewHandler(pool, riverPool *pgxpool.Pool, rc *river.Client[pgx.Tx]) *Handler {
 	return &Handler{
 		pool:        pool,
@@ -33,16 +31,12 @@ func NewHandler(pool, riverPool *pgxpool.Pool, rc *river.Client[pgx.Tx]) *Handle
 	}
 }
 
-// RegisterRoutes registers webhook routes for each gateway.
-// Each provider gets its own endpoint since gateways POST to different URLs.
 func (h *Handler) RegisterRoutes(r *gin.Engine, gateways map[string]payment.PaymentGateway) {
 	for name, gw := range gateways {
 		r.POST("/webhooks/"+name, h.handleWebhook(gw))
 	}
 }
 
-// handleWebhook returns a generic webhook handler for any gateway.
-// The gateway tells us which headers to read via WebhookHeaders().
 func (h *Handler) handleWebhook(gw payment.PaymentGateway) gin.HandlerFunc {
 	headers := gw.WebhookHeaders()
 
@@ -70,13 +64,13 @@ func (h *Handler) handleWebhook(gw payment.PaymentGateway) gin.HandlerFunc {
 
 		event, err := gw.VerifyWebhook(signature, body, timestamp)
 		if err != nil {
-			log.Printf("webhook: signature verification failed: %v", err)
+			slog.Warn("webhook signature verification failed", "err", err)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
 			return
 		}
 
 		if err := h.processPaymentEvent(c.Request.Context(), event); err != nil {
-			log.Printf("webhook: process event failed: %v", err)
+			slog.Error("webhook processing failed", "err", err, "order_id", event.OrderID)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "processing failed"})
 			return
 		}
@@ -87,15 +81,13 @@ func (h *Handler) handleWebhook(gw payment.PaymentGateway) gin.HandlerFunc {
 
 func (h *Handler) processPaymentEvent(ctx context.Context, event payment.WebhookEvent) error {
 	if event.Status != payment.StatusPaid {
-		log.Printf("webhook: ignoring event with status %s for order %s", event.Status, event.OrderID)
+		slog.Debug("webhook ignored", "status", event.Status, "order_id", event.OrderID)
 		return nil
 	}
 
-	// Use transaction for atomic DB update + job enqueue
-	// Must use riverPool (direct connection) for River's InsertTx
 	tx, err := h.riverPool.Begin(ctx)
 	if err != nil {
-		log.Printf("webhook: begin tx failed: %v", err)
+		slog.Error("webhook tx begin failed", "err", err)
 		return err
 	}
 	defer tx.Rollback(ctx)
@@ -105,7 +97,7 @@ func (h *Handler) processPaymentEvent(ctx context.Context, event payment.Webhook
 		ID:              event.OrderID,
 		ProviderOrderID: nil,
 	}); err != nil {
-		log.Printf("webhook: mark order paid failed: %v", err)
+		slog.Error("mark order paid failed", "err", err, "order_id", event.OrderID)
 		return err
 	}
 
@@ -116,15 +108,15 @@ func (h *Handler) processPaymentEvent(ctx context.Context, event payment.Webhook
 		PaidAt:      event.PaidAt.Format(time.RFC3339),
 	}, nil)
 	if err != nil {
-		log.Printf("webhook: insert job failed: %v", err)
+		slog.Error("river insert failed", "err", err, "order_id", event.OrderID)
 		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		log.Printf("webhook: commit failed: %v", err)
+		slog.Error("webhook tx commit failed", "err", err, "order_id", event.OrderID)
 		return err
 	}
 
-	log.Printf("webhook: order %s marked paid, notification enqueued", event.OrderID)
+	slog.Info("order paid", "order_id", event.OrderID, "amount_paise", event.AmountPaise)
 	return nil
 }
