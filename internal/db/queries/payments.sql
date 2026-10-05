@@ -13,11 +13,20 @@ SELECT * FROM payments.orders WHERE id = $1;
 -- name: GetOrderByProviderOrderID :one
 SELECT * FROM payments.orders WHERE provider_order_id = $1;
 
--- name: MarkOrderPaid :one
+-- name: GetOrderStatus :one
+SELECT id, status, total_paise FROM payments.orders WHERE id = $1;
+
+-- name: MarkOrderPaidIfActive :one
+-- Idempotent: only transitions ACTIVE → PAID when amount matches.
+-- Returns the row if transition happened, no rows otherwise.
 UPDATE payments.orders
-SET status = 'PAID', provider_order_id = $2, updated_at = now()
-WHERE id = $1
-RETURNING *;
+SET status = 'PAID', 
+    paid_at = $2,
+    updated_at = now()
+WHERE id = $1 
+  AND status = 'ACTIVE' 
+  AND total_paise = $3
+RETURNING id;
 
 -- name: UpdateOrderStatus :one
 UPDATE payments.orders

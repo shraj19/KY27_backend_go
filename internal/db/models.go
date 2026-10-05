@@ -6,6 +6,8 @@ package db
 
 import (
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type PaymentsIdempotencyKey struct {
@@ -16,17 +18,18 @@ type PaymentsIdempotencyKey struct {
 }
 
 type PaymentsOrder struct {
-	ID              string    `json:"id"`
-	BuyerID         string    `json:"buyer_id"`
-	TotalPaise      int64     `json:"total_paise"`
-	Currency        string    `json:"currency"`
-	Status          string    `json:"status"`
-	Provider        string    `json:"provider"`
-	ProviderOrderID *string   `json:"provider_order_id"`
-	BuyerPhone      string    `json:"buyer_phone"`
-	BuyerEmail      string    `json:"buyer_email"`
-	BuyerName       string    `json:"buyer_name"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	ExpiresAt       time.Time `json:"expires_at"`
+	ID              string             `json:"id"`
+	BuyerID         string             `json:"buyer_id"`
+	TotalPaise      int64              `json:"total_paise"`
+	Currency        string             `json:"currency"`
+	Status          string             `json:"status"`
+	Provider        string             `json:"provider"`
+	ProviderOrderID *string            `json:"provider_order_id"`
+	BuyerPhone      string             `json:"buyer_phone"`
+	BuyerEmail      string             `json:"buyer_email"`
+	BuyerName       string             `json:"buyer_name"`
+	CreatedAt       time.Time          `json:"created_at"`
+	UpdatedAt       time.Time          `json:"updated_at"`
+	ExpiresAt       time.Time          `json:"expires_at"`
+	PaidAt          pgtype.Timestamptz `json:"paid_at"`
 }

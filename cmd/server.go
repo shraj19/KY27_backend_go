@@ -190,7 +190,7 @@ func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, pool, 
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "provider": cfg.Gateway})
 	})
 
-	webhookHandler := webhook.NewHandler(pool, riverPool, rc)
+	webhookHandler := webhook.NewHandler(riverPool, rc)
 	webhookHandler.RegisterRoutes(r, map[string]payment.PaymentGateway{
 		cfg.Gateway: gw,
 	})

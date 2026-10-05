@@ -42,11 +42,12 @@ type CreatedOrder struct {
 
 // WebhookEvent is the parsed result of a payment webhook.
 type WebhookEvent struct {
-	OrderID     string
-	Status      Status
-	AmountPaise int64
-	PaidAt      time.Time
-	RawPayload  []byte // Original payload for audit
+	OrderID           string
+	ProviderPaymentID string    // Gateway's payment reference (e.g., cf_payment_id)
+	Status            Status
+	AmountPaise       int64
+	PaidAt            time.Time
+	RawPayload        []byte // Original payload for audit
 }
 
 // WebhookHeaders defines which HTTP headers contain signature data.

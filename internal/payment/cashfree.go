@@ -219,10 +219,11 @@ func parseCashfreeWebhook(webhookEvent any, body []byte) (WebhookEvent, error) {
 	}
 
 	return WebhookEvent{
-		OrderID:     payload.Data.Order.OrderID,
-		Status:      mapCashfreeStatus(status),
-		AmountPaise: amountPaise,
-		PaidAt:      paidAt,
-		RawPayload:  body,
+		OrderID:           payload.Data.Order.OrderID,
+		ProviderPaymentID: payload.Data.Payment.CFPaymentID,
+		Status:            mapCashfreeStatus(status),
+		AmountPaise:       amountPaise,
+		PaidAt:            paidAt,
+		RawPayload:        body,
 	}, nil
 }

@@ -8,6 +8,8 @@ package db
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createOrder = `-- name: CreateOrder :one
@@ -17,7 +19,7 @@ INSERT INTO payments.orders (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 )
-RETURNING id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at
+RETURNING id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at, paid_at
 `
 
 type CreateOrderParams struct {
@@ -63,6 +65,7 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Payme
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExpiresAt,
+		&i.PaidAt,
 	)
 	return i, err
 }
@@ -84,7 +87,7 @@ func (q *Queries) FindIdempotencyKey(ctx context.Context, key string) (PaymentsI
 }
 
 const getOrder = `-- name: GetOrder :one
-SELECT id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at FROM payments.orders WHERE id = $1
+SELECT id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at, paid_at FROM payments.orders WHERE id = $1
 `
 
 func (q *Queries) GetOrder(ctx context.Context, id string) (PaymentsOrder, error) {
@@ -104,12 +107,13 @@ func (q *Queries) GetOrder(ctx context.Context, id string) (PaymentsOrder, error
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExpiresAt,
+		&i.PaidAt,
 	)
 	return i, err
 }
 
 const getOrderByProviderOrderID = `-- name: GetOrderByProviderOrderID :one
-SELECT id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at FROM payments.orders WHERE provider_order_id = $1
+SELECT id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at, paid_at FROM payments.orders WHERE provider_order_id = $1
 `
 
 func (q *Queries) GetOrderByProviderOrderID(ctx context.Context, providerOrderID *string) (PaymentsOrder, error) {
@@ -129,7 +133,25 @@ func (q *Queries) GetOrderByProviderOrderID(ctx context.Context, providerOrderID
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExpiresAt,
+		&i.PaidAt,
 	)
+	return i, err
+}
+
+const getOrderStatus = `-- name: GetOrderStatus :one
+SELECT id, status, total_paise FROM payments.orders WHERE id = $1
+`
+
+type GetOrderStatusRow struct {
+	ID         string `json:"id"`
+	Status     string `json:"status"`
+	TotalPaise int64  `json:"total_paise"`
+}
+
+func (q *Queries) GetOrderStatus(ctx context.Context, id string) (GetOrderStatusRow, error) {
+	row := q.db.QueryRow(ctx, getOrderStatus, id)
+	var i GetOrderStatusRow
+	err := row.Scan(&i.ID, &i.Status, &i.TotalPaise)
 	return i, err
 }
 
@@ -157,44 +179,37 @@ func (q *Queries) InsertIdempotencyKey(ctx context.Context, arg InsertIdempotenc
 	return i, err
 }
 
-const markOrderPaid = `-- name: MarkOrderPaid :one
+const markOrderPaidIfActive = `-- name: MarkOrderPaidIfActive :one
 UPDATE payments.orders
-SET status = 'PAID', provider_order_id = $2, updated_at = now()
-WHERE id = $1
-RETURNING id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at
+SET status = 'PAID', 
+    paid_at = $2,
+    updated_at = now()
+WHERE id = $1 
+  AND status = 'ACTIVE' 
+  AND total_paise = $3
+RETURNING id
 `
 
-type MarkOrderPaidParams struct {
-	ID              string  `json:"id"`
-	ProviderOrderID *string `json:"provider_order_id"`
+type MarkOrderPaidIfActiveParams struct {
+	ID         string             `json:"id"`
+	PaidAt     pgtype.Timestamptz `json:"paid_at"`
+	TotalPaise int64              `json:"total_paise"`
 }
 
-func (q *Queries) MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) (PaymentsOrder, error) {
-	row := q.db.QueryRow(ctx, markOrderPaid, arg.ID, arg.ProviderOrderID)
-	var i PaymentsOrder
-	err := row.Scan(
-		&i.ID,
-		&i.BuyerID,
-		&i.TotalPaise,
-		&i.Currency,
-		&i.Status,
-		&i.Provider,
-		&i.ProviderOrderID,
-		&i.BuyerPhone,
-		&i.BuyerEmail,
-		&i.BuyerName,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ExpiresAt,
-	)
-	return i, err
+// Idempotent: only transitions ACTIVE → PAID when amount matches.
+// Returns the row if transition happened, no rows otherwise.
+func (q *Queries) MarkOrderPaidIfActive(ctx context.Context, arg MarkOrderPaidIfActiveParams) (string, error) {
+	row := q.db.QueryRow(ctx, markOrderPaidIfActive, arg.ID, arg.PaidAt, arg.TotalPaise)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const updateOrderStatus = `-- name: UpdateOrderStatus :one
 UPDATE payments.orders
 SET status = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at
+RETURNING id, buyer_id, total_paise, currency, status, provider, provider_order_id, buyer_phone, buyer_email, buyer_name, created_at, updated_at, expires_at, paid_at
 `
 
 type UpdateOrderStatusParams struct {
@@ -219,6 +234,7 @@ func (q *Queries) UpdateOrderStatus(ctx context.Context, arg UpdateOrderStatusPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExpiresAt,
+		&i.PaidAt,
 	)
 	return i, err
 }
