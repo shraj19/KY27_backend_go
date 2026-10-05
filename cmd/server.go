@@ -80,20 +80,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	queries := db.New(pool)
-	orderSvc := order.NewService(gateway, queries, cfg.Gateway)
-
 	riverClient, err := setupRiver(ctx, riverPool, cfg.NodeWebhookURL, cfg.ServiceToken)
 	if err != nil {
 		slog.Error("river init failed", "err", err)
 		os.Exit(1)
 	}
 
+	// order.Service owns the full order lifecycle
+	queries := db.New(pool)
+	jobAdapter := &riverJobAdapter{client: riverClient}
+	orderSvc := order.NewService(gateway, riverPool, queries, jobAdapter, cfg.Gateway)
+
 	grpcAddr := fmt.Sprintf(":%d", cfg.GRPCPort)
 	grpcSrv := startGRPC(grpcAddr, orderSvc, cfg.ServiceToken)
 
 	httpAddr := fmt.Sprintf(":%d", cfg.Port)
-	httpSrv := startHTTP(httpAddr, cfg, gateway, pool, riverPool, riverClient)
+	httpSrv := startHTTP(httpAddr, cfg, gateway, orderSvc)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -179,7 +181,7 @@ func startGRPC(addr string, orderSvc *order.Service, token string) *grpc.Server 
 	return srv
 }
 
-func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, pool, riverPool *pgxpool.Pool, rc *river.Client[pgx.Tx]) *http.Server {
+func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, orderSvc *order.Service) *http.Server {
 	r := gin.Default()
 
 	if mw := middleware.CORS(cfg.CorsOrigins); mw != nil {
@@ -190,7 +192,7 @@ func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, pool, 
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "provider": cfg.Gateway})
 	})
 
-	webhookHandler := webhook.NewHandler(riverPool, &riverAdapter{rc})
+	webhookHandler := webhook.NewHandler(orderSvc)
 	webhookHandler.RegisterRoutes(r, map[string]payment.PaymentGateway{
 		cfg.Gateway: gw,
 	})
@@ -210,13 +212,18 @@ func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, pool, 
 	return srv
 }
 
-// riverAdapter wraps River client to match webhook.JobInserter interface.
-type riverAdapter struct {
+// riverJobAdapter bridges River client to order.JobInserter interface.
+type riverJobAdapter struct {
 	client *river.Client[pgx.Tx]
 }
 
-func (r *riverAdapter) InsertTx(ctx context.Context, tx pgx.Tx, args jobs.NotifyNodeArgs, opts any) error {
-	_, err := r.client.InsertTx(ctx, tx, args, nil)
+func (r *riverJobAdapter) InsertTx(ctx context.Context, tx pgx.Tx, orderID, status string, amountPaise int64, paidAt string) error {
+	_, err := r.client.InsertTx(ctx, tx, jobs.NotifyNodeArgs{
+		OrderID:     orderID,
+		Status:      status,
+		AmountPaise: amountPaise,
+		PaidAt:      paidAt,
+	}, nil)
 	return err
 }
 

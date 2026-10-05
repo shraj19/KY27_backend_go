@@ -31,7 +31,7 @@ func (s *PaymentServer) CreatePayment(ctx context.Context, req *pb.CreatePayment
 		return nil, err
 	}
 
-	result, err := s.orderSvc.Create(ctx, order.Request{
+	result, err := s.orderSvc.Create(ctx, order.CreateRequest{
 		OrderID:        req.OrderId,
 		Buyer:          toBuyer(req.Buyer),
 		TotalPaise:     req.TotalPaise,

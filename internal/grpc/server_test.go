@@ -93,7 +93,7 @@ func setupTestServer(t *testing.T, token string) (pb.PaymentServiceClient, func(
 
 	// Create order service with mock gateway (no real DB for now)
 	gateway := &mockGateway{}
-	orderSvc := order.NewService(gateway, nil, "mock")
+	orderSvc := order.NewService(gateway, nil, nil, nil, "mock")
 
 	pb.RegisterPaymentServiceServer(srv, NewPaymentServer(orderSvc))
 
