@@ -64,14 +64,14 @@ func (s *Service) Create(ctx context.Context, req Request) (Result, error) {
 	// Idempotency: return existing order if key was already used.
 	if existing, err := s.queries.FindIdempotencyKey(ctx, req.IdempotencyKey); err == nil {
 		if existing.BodyHash != bodyHash {
-			slog.Warn("idempotency mismatch", "key", req.IdempotencyKey, "buyer_id", req.Buyer.ID)
+			slog.WarnContext(ctx, "idempotency mismatch", "key", req.IdempotencyKey, "buyer_id", req.Buyer.ID)
 			return Result{}, ErrIdempotencyMismatch
 		}
 		order, err := s.queries.GetOrder(ctx, existing.OrderID)
 		if err != nil {
 			return Result{}, fmt.Errorf("order: load idempotent order: %w", err)
 		}
-		slog.Debug("idempotency hit", "order_id", order.ID, "key", req.IdempotencyKey)
+		slog.DebugContext(ctx, "idempotency hit", "order_id", order.ID, "key", req.IdempotencyKey)
 		return Result{
 			OrderID: order.ID,
 			Status:  payment.Status(order.Status),
@@ -133,7 +133,7 @@ func (s *Service) Create(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("order: persist idempotency: %w", err)
 	}
 
-	slog.Info("order created", "order_id", orderID, "buyer_id", req.Buyer.ID, "amount_paise", req.TotalPaise)
+	slog.InfoContext(ctx, "order created", "order_id", orderID, "buyer_id", req.Buyer.ID, "amount_paise", req.TotalPaise)
 
 	return Result{
 		OrderID:          orderID,

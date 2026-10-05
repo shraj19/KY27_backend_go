@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/riverqueue/river"
+
+	"ky27/backend/internal/metrics"
 )
 
 // -----------------------------------------------------------------------------
@@ -65,16 +67,19 @@ func (w *NotifyNodeWorker) Work(ctx context.Context, job *river.Job[NotifyNodeAr
 
 	resp, err := w.httpClient.Do(req)
 	if err != nil {
-		slog.Warn("node notify failed", "err", err, "order_id", job.Args.OrderID, "attempt", job.Attempt)
+		metrics.RecordNodeNotification(ctx, false)
+		slog.WarnContext(ctx, "node notify failed", "err", err, "order_id", job.Args.OrderID, "attempt", job.Attempt)
 		return fmt.Errorf("post to node: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		slog.Info("node notified", "order_id", job.Args.OrderID, "status_code", resp.StatusCode)
+		metrics.RecordNodeNotification(ctx, true)
+		slog.InfoContext(ctx, "node notified", "order_id", job.Args.OrderID, "status_code", resp.StatusCode)
 		return nil
 	}
 
-	slog.Warn("node returned error", "order_id", job.Args.OrderID, "status_code", resp.StatusCode, "attempt", job.Attempt)
+	metrics.RecordNodeNotification(ctx, false)
+	slog.WarnContext(ctx, "node returned error", "order_id", job.Args.OrderID, "status_code", resp.StatusCode, "attempt", job.Attempt)
 	return fmt.Errorf("node returned status %d", resp.StatusCode)
 }

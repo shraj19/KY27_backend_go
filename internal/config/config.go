@@ -18,6 +18,11 @@ type Config struct {
 	Gateway        string   `env:"PAYMENT_PROVIDER" envDefault:"cashfree"`
 	NodeWebhookURL string   `env:"NODE_WEBHOOK_URL,required"`
 	CorsOrigins    []string `env:"CORS_ORIGINS" envSeparator:","`
+
+	// Grafana Cloud (traces, metrics, logs via OTLP)
+	TempoEndpoint string `env:"TEMPO_ENDPOINT"`
+	TempoUser     string `env:"TEMPO_USER"`
+	TempoAPIKey   string `env:"TEMPO_API_KEY"`
 }
 
 func (c Config) IsProd() bool    { return c.Env == "production" }

@@ -14,6 +14,7 @@ import (
 
 	"ky27/backend/internal/db"
 	"ky27/backend/internal/jobs"
+	"ky27/backend/internal/metrics"
 	"ky27/backend/internal/payment"
 )
 
@@ -64,13 +65,16 @@ func (h *Handler) handleWebhook(gw payment.PaymentGateway) gin.HandlerFunc {
 
 		event, err := gw.VerifyWebhook(signature, body, timestamp)
 		if err != nil {
-			slog.Warn("webhook signature verification failed", "err", err)
+			metrics.RecordWebhook(c.Request.Context(), false)
+			slog.WarnContext(c.Request.Context(), "webhook signature verification failed", "err", err)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
 			return
 		}
 
+		metrics.RecordWebhook(c.Request.Context(), true)
+
 		if err := h.processPaymentEvent(c.Request.Context(), event); err != nil {
-			slog.Error("webhook processing failed", "err", err, "order_id", event.OrderID)
+			slog.ErrorContext(c.Request.Context(), "webhook processing failed", "err", err, "order_id", event.OrderID)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "processing failed"})
 			return
 		}
@@ -81,13 +85,13 @@ func (h *Handler) handleWebhook(gw payment.PaymentGateway) gin.HandlerFunc {
 
 func (h *Handler) processPaymentEvent(ctx context.Context, event payment.WebhookEvent) error {
 	if event.Status != payment.StatusPaid {
-		slog.Debug("webhook ignored", "status", event.Status, "order_id", event.OrderID)
+		slog.DebugContext(ctx, "webhook ignored", "status", event.Status, "order_id", event.OrderID)
 		return nil
 	}
 
 	tx, err := h.riverPool.Begin(ctx)
 	if err != nil {
-		slog.Error("webhook tx begin failed", "err", err)
+		slog.ErrorContext(ctx, "webhook tx begin failed", "err", err)
 		return err
 	}
 	defer tx.Rollback(ctx)
@@ -97,7 +101,7 @@ func (h *Handler) processPaymentEvent(ctx context.Context, event payment.Webhook
 		ID:              event.OrderID,
 		ProviderOrderID: nil,
 	}); err != nil {
-		slog.Error("mark order paid failed", "err", err, "order_id", event.OrderID)
+		slog.ErrorContext(ctx, "mark order paid failed", "err", err, "order_id", event.OrderID)
 		return err
 	}
 
@@ -108,15 +112,16 @@ func (h *Handler) processPaymentEvent(ctx context.Context, event payment.Webhook
 		PaidAt:      event.PaidAt.Format(time.RFC3339),
 	}, nil)
 	if err != nil {
-		slog.Error("river insert failed", "err", err, "order_id", event.OrderID)
+		slog.ErrorContext(ctx, "river insert failed", "err", err, "order_id", event.OrderID)
 		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		slog.Error("webhook tx commit failed", "err", err, "order_id", event.OrderID)
+		slog.ErrorContext(ctx, "webhook tx commit failed", "err", err, "order_id", event.OrderID)
 		return err
 	}
 
-	slog.Info("order paid", "order_id", event.OrderID, "amount_paise", event.AmountPaise)
+	slog.InfoContext(ctx, "order paid", "order_id", event.OrderID, "amount_paise", event.AmountPaise)
+	metrics.RecordPaymentSuccess(ctx, event.AmountPaise)
 	return nil
 }

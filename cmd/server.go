@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
@@ -29,13 +30,17 @@ import (
 	grpcserver "ky27/backend/internal/grpc"
 	"ky27/backend/internal/jobs"
 	"ky27/backend/internal/logger"
+	"ky27/backend/internal/metrics"
 	"ky27/backend/internal/middleware"
 	"ky27/backend/internal/order"
 	"ky27/backend/internal/payment"
+	"ky27/backend/internal/telemetry"
 	"ky27/backend/internal/webhook"
 )
 
 func main() {
+	ctx := context.Background()
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("config load failed", "err", err)
@@ -44,20 +49,32 @@ func main() {
 
 	logger.Init(cfg)
 
+	// Init tracing and metrics
+	shutdownTracer, err := telemetry.Init(ctx, cfg)
+	if err != nil {
+		slog.Error("tracing init failed", "err", err)
+		os.Exit(1)
+	}
+
+	if err := metrics.Init(); err != nil {
+		slog.Error("metrics init failed", "err", err)
+		os.Exit(1)
+	}
+
 	gateway, err := newGateway(cfg.Gateway)
 	if err != nil {
 		slog.Error("gateway init failed", "err", err)
 		os.Exit(1)
 	}
 
-	pool, err := db.Connect(context.Background(), cfg.DatabaseURL)
+	pool, err := db.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("db connect failed", "err", err)
 		os.Exit(1)
 	}
 
 	directURL := strings.Replace(cfg.DatabaseURL, "-pooler", "", 1)
-	riverPool, err := db.ConnectDirect(context.Background(), directURL)
+	riverPool, err := db.ConnectDirect(ctx, directURL)
 	if err != nil {
 		slog.Error("db connect (river) failed", "err", err)
 		os.Exit(1)
@@ -66,7 +83,7 @@ func main() {
 	queries := db.New(pool)
 	orderSvc := order.NewService(gateway, queries, cfg.Gateway)
 
-	riverClient, err := setupRiver(context.Background(), riverPool, cfg.NodeWebhookURL, cfg.ServiceToken)
+	riverClient, err := setupRiver(ctx, riverPool, cfg.NodeWebhookURL, cfg.ServiceToken)
 	if err != nil {
 		slog.Error("river init failed", "err", err)
 		os.Exit(1)
@@ -84,17 +101,21 @@ func main() {
 
 	slog.Info("shutting down")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	if err := httpSrv.Shutdown(ctx); err != nil {
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("http shutdown failed", "err", err)
 	}
 
 	grpcSrv.GracefulStop()
 
-	if err := riverClient.Stop(ctx); err != nil {
+	if err := riverClient.Stop(shutdownCtx); err != nil {
 		slog.Error("river shutdown failed", "err", err)
+	}
+
+	if err := shutdownTracer(shutdownCtx); err != nil {
+		slog.Error("tracer shutdown failed", "err", err)
 	}
 
 	pool.Close()
@@ -140,7 +161,10 @@ func startGRPC(addr string, orderSvc *order.Service, token string) *grpc.Server 
 
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
-		grpc.UnaryInterceptor(auth.UnaryServerInterceptor(middleware.AuthInterceptor(token))),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.ChainUnaryInterceptor(
+			auth.UnaryServerInterceptor(middleware.AuthInterceptor(token)),
+		),
 	)
 	pb.RegisterPaymentServiceServer(srv, grpcserver.NewPaymentServer(orderSvc))
 	reflection.Register(srv)
