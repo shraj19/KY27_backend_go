@@ -13,6 +13,7 @@ service PaymentService {
 
   // GetPaymentStatus returns the current status of a payment order.
   rpc GetPaymentStatus(GetPaymentStatusRequest) returns (GetPaymentStatusResponse);
+
 }
 
 // -----------------------------------------------------------------------------
@@ -22,10 +23,9 @@ service PaymentService {
 message CreatePaymentRequest {
   string order_id = 1;         // Optional. If empty, Go generates one.
   Buyer buyer = 2;
-  repeated Item items = 3;     // Cart: N tickets for N attendees
-  int64 total_paise = 4;       // Trusted total from Node
-  string currency = 5;         // Default: INR
-  string idempotency_key = 6;  // Required for retry safety
+  int64 total_paise = 3;       // Trusted total from Node
+  string currency = 4;         // Default: INR
+  string idempotency_key = 5;  // Required for retry safety
 }
 
 message Buyer {
@@ -33,14 +33,6 @@ message Buyer {
   string phone = 2;
   string email = 3;
   string name = 4;
-}
-
-message Item {
-  string pass_id = 1;
-  int64 amount_paise = 2;
-  string attendee_name = 3;
-  string attendee_email = 4;
-  string attendee_phone = 5;
 }
 
 message CreatePaymentResponse {

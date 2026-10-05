@@ -67,49 +67,6 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Payme
 	return i, err
 }
 
-const createOrderItem = `-- name: CreateOrderItem :one
-INSERT INTO payments.order_items (
-    id, order_id, pass_id, amount_paise, attendee_name, attendee_email, attendee_phone
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7
-)
-RETURNING id, order_id, pass_id, amount_paise, attendee_name, attendee_email, attendee_phone, created_at
-`
-
-type CreateOrderItemParams struct {
-	ID            string `json:"id"`
-	OrderID       string `json:"order_id"`
-	PassID        string `json:"pass_id"`
-	AmountPaise   int64  `json:"amount_paise"`
-	AttendeeName  string `json:"attendee_name"`
-	AttendeeEmail string `json:"attendee_email"`
-	AttendeePhone string `json:"attendee_phone"`
-}
-
-func (q *Queries) CreateOrderItem(ctx context.Context, arg CreateOrderItemParams) (PaymentsOrderItem, error) {
-	row := q.db.QueryRow(ctx, createOrderItem,
-		arg.ID,
-		arg.OrderID,
-		arg.PassID,
-		arg.AmountPaise,
-		arg.AttendeeName,
-		arg.AttendeeEmail,
-		arg.AttendeePhone,
-	)
-	var i PaymentsOrderItem
-	err := row.Scan(
-		&i.ID,
-		&i.OrderID,
-		&i.PassID,
-		&i.AmountPaise,
-		&i.AttendeeName,
-		&i.AttendeeEmail,
-		&i.AttendeePhone,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const findIdempotencyKey = `-- name: FindIdempotencyKey :one
 SELECT key, body_hash, order_id, created_at FROM payments.idempotency_keys WHERE key = $1
 `
@@ -174,39 +131,6 @@ func (q *Queries) GetOrderByProviderOrderID(ctx context.Context, providerOrderID
 		&i.ExpiresAt,
 	)
 	return i, err
-}
-
-const getOrderItems = `-- name: GetOrderItems :many
-SELECT id, order_id, pass_id, amount_paise, attendee_name, attendee_email, attendee_phone, created_at FROM payments.order_items WHERE order_id = $1
-`
-
-func (q *Queries) GetOrderItems(ctx context.Context, orderID string) ([]PaymentsOrderItem, error) {
-	rows, err := q.db.Query(ctx, getOrderItems, orderID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []PaymentsOrderItem
-	for rows.Next() {
-		var i PaymentsOrderItem
-		if err := rows.Scan(
-			&i.ID,
-			&i.OrderID,
-			&i.PassID,
-			&i.AmountPaise,
-			&i.AttendeeName,
-			&i.AttendeeEmail,
-			&i.AttendeePhone,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const insertIdempotencyKey = `-- name: InsertIdempotencyKey :one

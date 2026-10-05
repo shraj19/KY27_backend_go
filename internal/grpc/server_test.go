@@ -78,10 +78,6 @@ func (m *mockQueries) CreateOrder(ctx context.Context, params interface{}) (inte
 	return nil, nil
 }
 
-func (m *mockQueries) CreateOrderItem(ctx context.Context, params interface{}) (interface{}, error) {
-	return nil, nil
-}
-
 func (m *mockQueries) InsertIdempotencyKey(ctx context.Context, params interface{}) (interface{}, error) {
 	return nil, nil
 }
@@ -209,17 +205,9 @@ func TestCreatePayment_Validation(t *testing.T) {
 			wantErr: "buyer.phone is required",
 		},
 		{
-			name: "missing items",
-			req: &pb.CreatePaymentRequest{
-				Buyer: &pb.Buyer{Id: "user1", Phone: "123"},
-			},
-			wantErr: "items cannot be empty",
-		},
-		{
 			name: "zero total",
 			req: &pb.CreatePaymentRequest{
 				Buyer:      &pb.Buyer{Id: "user1", Phone: "123"},
-				Items:      []*pb.Item{{PassId: "VIP"}},
 				TotalPaise: 0,
 			},
 			wantErr: "total_paise must be positive",
@@ -228,7 +216,6 @@ func TestCreatePayment_Validation(t *testing.T) {
 			name: "missing idempotency key",
 			req: &pb.CreatePaymentRequest{
 				Buyer:      &pb.Buyer{Id: "user1", Phone: "123"},
-				Items:      []*pb.Item{{PassId: "VIP"}},
 				TotalPaise: 1000,
 			},
 			wantErr: "idempotency_key is required",

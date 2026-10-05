@@ -28,21 +28,11 @@ type Buyer struct {
 	Name  string
 }
 
-// Item is one line item (one ticket for one attendee).
-type Item struct {
-	PassID        string
-	AmountPaise   int64
-	AttendeeName  string
-	AttendeeEmail string
-	AttendeePhone string
-}
-
 // Request is a pre-priced order from Node. Go trusts the total.
 type Request struct {
-	OrderID        string // Node's order id
+	OrderID        string
 	Buyer          Buyer
-	Items          []Item // the cart: N tickets for N attendees
-	TotalPaise     int64  // trusted total from Node (sum of items + any discounts)
+	TotalPaise     int64
 	Currency       string
 	IdempotencyKey string
 }
@@ -65,7 +55,8 @@ func NewService(gw payment.PaymentGateway, q *db.Queries, provider string) *Serv
 	return &Service{gateway: gw, queries: q, provider: provider}
 }
 
-// Create creates a payment order with line items. The total is trusted from Node.
+// Create creates a payment order. The total is trusted from Node.
+// Line items are not stored - Node owns that data.
 func (s *Service) Create(ctx context.Context, req Request) (Result, error) {
 	bodyHash := hashRequest(req)
 
@@ -130,22 +121,6 @@ func (s *Service) Create(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("order: persist: %w", err)
 	}
 
-	// Persist each line item.
-	for _, item := range req.Items {
-		itemID := uuid.NewString()
-		if _, err := s.queries.CreateOrderItem(ctx, db.CreateOrderItemParams{
-			ID:            itemID,
-			OrderID:       orderID,
-			PassID:        item.PassID,
-			AmountPaise:   item.AmountPaise,
-			AttendeeName:  item.AttendeeName,
-			AttendeeEmail: item.AttendeeEmail,
-			AttendeePhone: item.AttendeePhone,
-		}); err != nil {
-			return Result{}, fmt.Errorf("order: persist item: %w", err)
-		}
-	}
-
 	// Store the idempotency key.
 	if _, err := s.queries.InsertIdempotencyKey(ctx, db.InsertIdempotencyKeyParams{
 		Key:      req.IdempotencyKey,
@@ -163,7 +138,7 @@ func (s *Service) Create(ctx context.Context, req Request) (Result, error) {
 }
 
 func hashRequest(r Request) string {
-	data := fmt.Sprintf("%s|%s|%d|%d|%s", r.OrderID, r.Buyer.ID, r.TotalPaise, len(r.Items), r.IdempotencyKey)
+	data := fmt.Sprintf("%s|%s|%d|%s", r.OrderID, r.Buyer.ID, r.TotalPaise, r.IdempotencyKey)
 	sum := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(sum[:])
 }

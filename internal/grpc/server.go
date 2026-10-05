@@ -34,7 +34,6 @@ func (s *PaymentServer) CreatePayment(ctx context.Context, req *pb.CreatePayment
 	result, err := s.orderSvc.Create(ctx, order.Request{
 		OrderID:        req.OrderId,
 		Buyer:          toBuyer(req.Buyer),
-		Items:          toItems(req.Items),
 		TotalPaise:     req.TotalPaise,
 		Currency:       req.Currency,
 		IdempotencyKey: req.IdempotencyKey,
@@ -84,9 +83,6 @@ func validateCreateRequest(req *pb.CreatePaymentRequest) error {
 	if req.Buyer.Phone == "" {
 		return status.Error(codes.InvalidArgument, "buyer.phone is required")
 	}
-	if len(req.Items) == 0 {
-		return status.Error(codes.InvalidArgument, "items cannot be empty")
-	}
 	if req.TotalPaise <= 0 {
 		return status.Error(codes.InvalidArgument, "total_paise must be positive")
 	}
@@ -110,20 +106,6 @@ func toBuyer(b *pb.Buyer) order.Buyer {
 		Email: b.Email,
 		Name:  b.Name,
 	}
-}
-
-func toItems(items []*pb.Item) []order.Item {
-	result := make([]order.Item, len(items))
-	for i, item := range items {
-		result[i] = order.Item{
-			PassID:        item.PassId,
-			AmountPaise:   item.AmountPaise,
-			AttendeeName:  item.AttendeeName,
-			AttendeeEmail: item.AttendeeEmail,
-			AttendeePhone: item.AttendeePhone,
-		}
-	}
-	return result
 }
 
 func toProtoStatus(s payment.Status) pb.PaymentStatus {

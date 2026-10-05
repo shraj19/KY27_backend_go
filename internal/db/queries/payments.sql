@@ -7,19 +7,8 @@ INSERT INTO payments.orders (
 )
 RETURNING *;
 
--- name: CreateOrderItem :one
-INSERT INTO payments.order_items (
-    id, order_id, pass_id, amount_paise, attendee_name, attendee_email, attendee_phone
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7
-)
-RETURNING *;
-
 -- name: GetOrder :one
 SELECT * FROM payments.orders WHERE id = $1;
-
--- name: GetOrderItems :many
-SELECT * FROM payments.order_items WHERE order_id = $1;
 
 -- name: GetOrderByProviderOrderID :one
 SELECT * FROM payments.orders WHERE provider_order_id = $1;

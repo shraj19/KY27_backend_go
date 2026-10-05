@@ -6,7 +6,7 @@
 CREATE SCHEMA IF NOT EXISTS payments;
 
 -- Orders: the payment transaction. One buyer, one total amount.
--- Line items (tickets/attendees) are in order_items.
+-- Line items (tickets/attendees) stay in Node - payment service only cares about totals.
 CREATE TABLE payments.orders (
     id               text        PRIMARY KEY,
     buyer_id         text        NOT NULL,
@@ -25,20 +25,6 @@ CREATE TABLE payments.orders (
 );
 CREATE INDEX orders_buyer_id_idx ON payments.orders (buyer_id);
 
--- Order line items: each row is one ticket for one attendee.
--- A single order can have multiple items (cart model).
-CREATE TABLE payments.order_items (
-    id              text        PRIMARY KEY,
-    order_id        text        NOT NULL REFERENCES payments.orders(id) ON DELETE CASCADE,
-    pass_id         text        NOT NULL,
-    amount_paise    bigint      NOT NULL CHECK (amount_paise >= 0),
-    attendee_name   text        NOT NULL,
-    attendee_email  text        NOT NULL,
-    attendee_phone  text        NOT NULL DEFAULT '',
-    created_at      timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX order_items_order_id_idx ON payments.order_items (order_id);
-
 -- Idempotency: dedupe identical requests. Key from caller, body_hash binds it
 -- to the exact payload (same key + different body = reject).
 CREATE TABLE payments.idempotency_keys (
@@ -53,7 +39,6 @@ CREATE TABLE payments.idempotency_keys (
 -- +goose Down
 -- +goose StatementBegin
 DROP TABLE IF EXISTS payments.idempotency_keys;
-DROP TABLE IF EXISTS payments.order_items;
 DROP TABLE IF EXISTS payments.orders;
 DROP SCHEMA IF EXISTS payments;
 -- +goose StatementEnd

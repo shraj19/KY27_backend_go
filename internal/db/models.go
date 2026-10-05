@@ -30,14 +30,3 @@ type PaymentsOrder struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 	ExpiresAt       time.Time `json:"expires_at"`
 }
-
-type PaymentsOrderItem struct {
-	ID            string    `json:"id"`
-	OrderID       string    `json:"order_id"`
-	PassID        string    `json:"pass_id"`
-	AmountPaise   int64     `json:"amount_paise"`
-	AttendeeName  string    `json:"attendee_name"`
-	AttendeeEmail string    `json:"attendee_email"`
-	AttendeePhone string    `json:"attendee_phone"`
-	CreatedAt     time.Time `json:"created_at"`
-}
