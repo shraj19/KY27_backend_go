@@ -190,7 +190,7 @@ func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, pool, 
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "provider": cfg.Gateway})
 	})
 
-	webhookHandler := webhook.NewHandler(riverPool, rc)
+	webhookHandler := webhook.NewHandler(riverPool, &riverAdapter{rc})
 	webhookHandler.RegisterRoutes(r, map[string]payment.PaymentGateway{
 		cfg.Gateway: gw,
 	})
@@ -208,6 +208,16 @@ func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, pool, 
 	}()
 
 	return srv
+}
+
+// riverAdapter wraps River client to match webhook.JobInserter interface.
+type riverAdapter struct {
+	client *river.Client[pgx.Tx]
+}
+
+func (r *riverAdapter) InsertTx(ctx context.Context, tx pgx.Tx, args jobs.NotifyNodeArgs, opts any) error {
+	_, err := r.client.InsertTx(ctx, tx, args, nil)
+	return err
 }
 
 func newGateway(provider string) (payment.PaymentGateway, error) {

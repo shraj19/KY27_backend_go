@@ -11,8 +11,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/riverqueue/river"
 
 	"ky27/backend/internal/db"
 	"ky27/backend/internal/jobs"
@@ -20,16 +18,24 @@ import (
 	"ky27/backend/internal/payment"
 )
 
-type Handler struct {
-	riverPool   *pgxpool.Pool
-	riverClient *river.Client[pgx.Tx]
+// TxBeginner starts a transaction. Implemented by *pgxpool.Pool.
+type TxBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-func NewHandler(riverPool *pgxpool.Pool, rc *river.Client[pgx.Tx]) *Handler {
-	return &Handler{
-		riverPool:   riverPool,
-		riverClient: rc,
-	}
+// JobInserter inserts jobs transactionally. Implemented by *river.Client.
+type JobInserter interface {
+	InsertTx(ctx context.Context, tx pgx.Tx, args jobs.NotifyNodeArgs, opts any) error
+}
+
+// Handler processes payment webhooks.
+type Handler struct {
+	pool   TxBeginner
+	jobs   JobInserter
+}
+
+func NewHandler(pool TxBeginner, jobs JobInserter) *Handler {
+	return &Handler{pool: pool, jobs: jobs}
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine, gateways map[string]payment.PaymentGateway) {
@@ -84,13 +90,12 @@ func (h *Handler) handleWebhook(gw payment.PaymentGateway) gin.HandlerFunc {
 }
 
 func (h *Handler) processPaymentEvent(ctx context.Context, event payment.WebhookEvent) error {
-	// Only process successful payments
 	if event.Status != payment.StatusPaid {
 		slog.DebugContext(ctx, "webhook ignored", "status", event.Status, "order_id", event.OrderID)
 		return nil
 	}
 
-	tx, err := h.riverPool.Begin(ctx)
+	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "webhook tx begin failed", "err", err)
 		return err
@@ -98,8 +103,6 @@ func (h *Handler) processPaymentEvent(ctx context.Context, event payment.Webhook
 	defer tx.Rollback(ctx)
 
 	queries := db.New(tx)
-
-	// Convert time.Time to pgtype.Timestamptz
 	paidAt := pgtype.Timestamptz{Time: event.PaidAt, Valid: !event.PaidAt.IsZero()}
 
 	// Idempotent transition: only succeeds if ACTIVE + amount matches
@@ -110,8 +113,6 @@ func (h *Handler) processPaymentEvent(ctx context.Context, event payment.Webhook
 	})
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		// No row updated — either already paid, not found, or amount mismatch
-		// Check why to log appropriately
 		return h.handleNoTransition(ctx, queries, event)
 	}
 	if err != nil {
@@ -119,8 +120,8 @@ func (h *Handler) processPaymentEvent(ctx context.Context, event payment.Webhook
 		return err
 	}
 
-	// Transition succeeded — enqueue notification (only happens once per order)
-	_, err = h.riverClient.InsertTx(ctx, tx, jobs.NotifyNodeArgs{
+	// Transition succeeded — enqueue notification
+	err = h.jobs.InsertTx(ctx, tx, jobs.NotifyNodeArgs{
 		OrderID:     event.OrderID,
 		Status:      string(event.Status),
 		AmountPaise: event.AmountPaise,
@@ -136,47 +137,42 @@ func (h *Handler) processPaymentEvent(ctx context.Context, event payment.Webhook
 		return err
 	}
 
-	slog.InfoContext(ctx, "order paid", 
-		"order_id", event.OrderID, 
+	slog.InfoContext(ctx, "order paid",
+		"order_id", event.OrderID,
 		"amount_paise", event.AmountPaise,
 		"provider_payment_id", event.ProviderPaymentID)
 	metrics.RecordPaymentSuccess(ctx, event.AmountPaise)
 	return nil
 }
 
-// handleNoTransition distinguishes why MarkOrderPaidIfActive returned no rows.
-func (h *Handler) handleNoTransition(ctx context.Context, queries *db.Queries, event payment.WebhookEvent) error {
+func (h *Handler) handleNoTransition(ctx context.Context, queries db.Querier, event payment.WebhookEvent) error {
 	order, err := queries.GetOrderStatus(ctx, event.OrderID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Order doesn't exist — this is suspicious
-		slog.WarnContext(ctx, "webhook for unknown order", 
+		slog.WarnContext(ctx, "webhook for unknown order",
 			"order_id", event.OrderID,
 			"provider_payment_id", event.ProviderPaymentID)
-		return nil // Return 200 to stop retries, but log for investigation
+		return nil
 	}
 	if err != nil {
 		return err
 	}
 
 	if order.Status == "PAID" {
-		// Duplicate webhook — idempotent success
 		slog.DebugContext(ctx, "duplicate webhook ignored", "order_id", event.OrderID)
 		return nil
 	}
 
 	if order.TotalPaise != event.AmountPaise {
-		// Amount mismatch — serious issue, log for manual investigation
-		slog.ErrorContext(ctx, "webhook amount mismatch", 
+		slog.ErrorContext(ctx, "webhook amount mismatch",
 			"order_id", event.OrderID,
 			"expected_paise", order.TotalPaise,
 			"webhook_paise", event.AmountPaise,
 			"provider_payment_id", event.ProviderPaymentID)
 		metrics.RecordPaymentFailed(ctx, "amount_mismatch")
-		return nil // Return 200 to stop retries, needs manual review
+		return nil
 	}
 
-	// Status is not ACTIVE and not PAID (EXPIRED or FAILED) — log and ignore
-	slog.WarnContext(ctx, "webhook for non-active order", 
+	slog.WarnContext(ctx, "webhook for non-active order",
 		"order_id", event.OrderID,
 		"status", order.Status,
 		"provider_payment_id", event.ProviderPaymentID)

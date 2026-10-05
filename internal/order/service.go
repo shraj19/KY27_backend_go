@@ -48,11 +48,11 @@ type Result struct {
 // Service creates payment orders.
 type Service struct {
 	gateway  payment.PaymentGateway
-	queries  *db.Queries
+	queries  db.Querier // Interface for testability
 	provider string
 }
 
-func NewService(gw payment.PaymentGateway, q *db.Queries, provider string) *Service {
+func NewService(gw payment.PaymentGateway, q db.Querier, provider string) *Service {
 	return &Service{gateway: gw, queries: q, provider: provider}
 }
 
