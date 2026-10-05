@@ -187,7 +187,11 @@ func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, pool, 
 func newGateway(provider string) (payment.PaymentGateway, error) {
 	switch provider {
 	case "cashfree":
-		return payment.NewCashfreeProvider(config.LoadCashfreeConfig())
+		cfg, err := config.LoadCashfreeConfig()
+		if err != nil {
+			return nil, err
+		}
+		return payment.NewCashfreeProvider(cfg)
 	default:
 		return nil, fmt.Errorf("unknown payment provider: %s", provider)
 	}

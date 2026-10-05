@@ -4,6 +4,8 @@ github.com/bytedance/sonic v1.5.0/go.mod h1:ED5hyg4y6t3/9Ku1R6dU/4KyJ48DZ4jPhfY1
 github.com/bytedance/sonic v1.10.0-rc/go.mod h1:ElCzW+ufi8qKqNW0FY314xriJhyJhuoJ3gFZdAHF7NM=
 github.com/bytedance/sonic v1.10.1 h1:7a1wuFXL1cMy7a3f7/VFcEtriuXQnUBhtoVfOZiaysc=
 github.com/bytedance/sonic v1.10.1/go.mod h1:iZcSUejdk5aukTND/Eu/ivjQuEL0Cu9/rf50Hi0u/g4=
+github.com/caarlos0/env/v11 v11.4.1 h1:fYwH0sWEsBSMPG7t4e/PEfTFzrWrpjyygXyUnWiSwEw=
+github.com/caarlos0/env/v11 v11.4.1/go.mod h1:qupehSf/Y0TUTsxKywqRt/vJjN5nz6vauiYEUUr8P4U=
 github.com/cashfree/cashfree-pg/v3 v3.2.14 h1:EM9ZyMYYlqb6j7TaneyQc2iRidkplq5debhfjq4bHIE=
 github.com/cashfree/cashfree-pg/v3 v3.2.14/go.mod h1:Ask/lU8EQPv2NMOnZow8ln0E9IfFbfrwyQapPVAVPfA=
 github.com/cashfree/cashfree-pg/v5 v5.1.9 h1:Bv8uXpPFh+KZrVMouitAWGHgrNxLm7e6OZfwamCKSIk=

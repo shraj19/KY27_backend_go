@@ -3,30 +3,34 @@ package config
 import (
 	"fmt"
 
+	"github.com/caarlos0/env/v11"
 	"github.com/joho/godotenv"
-	"github.com/kelseyhightower/envconfig"
 )
 
-// Config is the fully-loaded, validated application configuration.
+// Config holds core application configuration.
+// Provider-specific config is loaded separately based on Gateway.
 type Config struct {
-	Port           int      `envconfig:"PORT" default:"8081"`
-	GRPCPort       int      `envconfig:"GRPC_PORT" default:"50051"`
-	CorsOrigins    []string `envconfig:"CORS_ORIGINS"`
-	DatabaseURL    string   `envconfig:"DATABASE_URL" required:"true"`
-	Gateway        string   `envconfig:"PAYMENT_PROVIDER" required:"true"`
-	ServiceToken   string   `envconfig:"SERVICE_TOKEN" required:"true"`
-	NodeWebhookURL string   `envconfig:"NODE_WEBHOOK_URL" required:"true"`
+	Env            string   `env:"APP_ENV" envDefault:"development"` // development | staging | production
+	DatabaseURL    string   `env:"DATABASE_URL,required"`
+	Port           int      `env:"PORT" envDefault:"8081"`
+	GRPCPort       int      `env:"GRPC_PORT" envDefault:"50051"`
+	ServiceToken   string   `env:"SERVICE_TOKEN,required"`
+	Gateway        string   `env:"PAYMENT_PROVIDER" envDefault:"cashfree"`
+	NodeWebhookURL string   `env:"NODE_WEBHOOK_URL,required"`
+	CorsOrigins    []string `env:"CORS_ORIGINS" envSeparator:","`
 }
 
+func (c Config) IsProd() bool    { return c.Env == "production" }
+func (c Config) IsStaging() bool { return c.Env == "staging" }
+func (c Config) IsDev() bool     { return c.Env == "development" }
+
 // Load reads .env (if present), then populates Config from environment.
-// Fails fast if required config is missing.
 func Load() (Config, error) {
-	_ = godotenv.Load() // .env → os.Environ; no error if file missing
+	_ = godotenv.Load() // ignore error if .env missing
 
 	var cfg Config
-	if err := envconfig.Process("", &cfg); err != nil {
+	if err := env.Parse(&cfg); err != nil {
 		return Config{}, fmt.Errorf("config: %w", err)
 	}
-
 	return cfg, nil
 }
