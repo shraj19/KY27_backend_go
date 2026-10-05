@@ -68,17 +68,34 @@ type JobInserter interface {
 	InsertTx(ctx context.Context, tx pgx.Tx, orderID string, status string, amountPaise int64, paidAt string) error
 }
 
+// QuerierFactory creates a Querier from a transaction. Allows test injection.
+type QuerierFactory func(tx pgx.Tx) db.Querier
+
 // Service manages the order lifecycle.
 type Service struct {
-	gateway  payment.PaymentGateway
-	pool     TxBeginner // For transactional operations
-	queries  db.Querier // For non-transactional reads
-	jobs     JobInserter
-	provider string
+	gateway        payment.PaymentGateway
+	pool           TxBeginner
+	queries        db.Querier      // For non-transactional reads
+	querierFactory QuerierFactory  // For transactional operations
+	jobs           JobInserter
+	provider       string
 }
 
 func NewService(gw payment.PaymentGateway, pool TxBeginner, q db.Querier, jobs JobInserter, provider string) *Service {
-	return &Service{gateway: gw, pool: pool, queries: q, jobs: jobs, provider: provider}
+	return &Service{
+		gateway:        gw,
+		pool:           pool,
+		queries:        q,
+		querierFactory: func(tx pgx.Tx) db.Querier { return db.New(tx) }, // Default: real db.Queries
+		jobs:           jobs,
+		provider:       provider,
+	}
+}
+
+// WithQuerierFactory sets a custom querier factory (for testing).
+func (s *Service) WithQuerierFactory(f QuerierFactory) *Service {
+	s.querierFactory = f
+	return s
 }
 
 // Create creates a new payment order. Returns existing order on idempotency hit.
@@ -169,7 +186,7 @@ func (s *Service) Complete(ctx context.Context, req CompleteRequest) error {
 	}
 	defer tx.Rollback(ctx)
 
-	queries := db.New(tx)
+	queries := s.querierFactory(tx)
 	paidAt := pgtype.Timestamptz{Time: req.PaidAt, Valid: !req.PaidAt.IsZero()}
 
 	// Idempotent transition: only succeeds if ACTIVE + amount matches
