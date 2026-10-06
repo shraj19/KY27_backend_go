@@ -31,7 +31,7 @@ type Config struct {
 	TempoAPIKey   string `env:"TEMPO_API_KEY"`
 
 	// SSM config (only used when APP_ENV=production)
-	SSMPrefix string `env:"SSM_PREFIX" envDefault:"/ky27/prod"` // e.g., /ky27/prod
+	SSMPrefix string `env:"SSM_PREFIX" envDefault:"/ky27/payment/prod"` // e.g., /ky27/payment/prod
 	AWSRegion string `env:"AWS_REGION" envDefault:"ap-south-1"`
 }
 
