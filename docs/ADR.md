@@ -306,28 +306,45 @@ RETURNING id;
 
 ---
 
-## ADR-006: gRPC with TLS + Token Auth for Internal Services
+## ADR-006: gRPC without TLS for Internal Services
 
-**Status:** Accepted
+**Status:** Accepted (Updated Oct 2026)
 
 **Context:** Node backend calls Go payment service. Need secure communication.
 
-**Options:**
+**Original Options Considered:**
 1. **HTTP + API key header** — simple, works
 2. **gRPC + TLS + token** — typed, encrypted, authenticated
 3. **mTLS** — both sides verify certificates, complex setup
 
-**Decision:** gRPC with server TLS + bearer token in metadata.
+**Decision:** gRPC with bearer token auth, **no TLS**.
 
 **Rationale:**
-- TLS encrypts traffic
-- Token auth is simple (shared secret between services)
-- gRPC gives typed contracts via protobuf
-- mTLS overkill for single-cluster deployment
+- Services communicate within AWS VPC — traffic never leaves internal network
+- AWS VPC provides network-level isolation
+- TLS between internal services adds operational complexity (cert management, rotation)
+- Token auth still validates that caller is authorized
+- External traffic (browser → API) is TLS-terminated at load balancer
+
+**When to Revisit:**
+- If services move to different cloud accounts/regions
+- If compliance requires encryption in transit within VPC
+- If deploying to environment without network-level isolation
+
+**How to Add TLS Later (if needed):**
+```go
+// Go server
+creds, _ := credentials.NewServerTLSFromFile("server.crt", "server.key")
+srv := grpc.NewServer(grpc.Creds(creds), ...)
+
+// Node client
+const rootCert = fs.readFileSync(process.env.GRPC_CA_CERT_PATH);
+const credentials = grpc.credentials.createSsl(rootCert);
+```
 
 **Consequences:**
-- Need to generate and manage TLS certificates
-- Token stored in both services' config
+- Simpler deployment — no cert files to manage
+- Token auth still required for authorization
 - Auth interceptor validates token on every request
 
 ---

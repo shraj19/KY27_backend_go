@@ -19,7 +19,6 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
@@ -155,14 +154,9 @@ func startGRPC(addr string, orderSvc *order.Service, token string) *grpc.Server 
 		os.Exit(1)
 	}
 
-	creds, err := credentials.NewServerTLSFromFile("certs/server.crt", "certs/server.key")
-	if err != nil {
-		slog.Error("grpc tls load failed", "err", err)
-		os.Exit(1)
-	}
-
+	// NOTE: TLS disabled — internal service communication only.
+	// Traffic stays within AWS VPC. If TLS is needed later, see docs/ADR.md.
 	srv := grpc.NewServer(
-		grpc.Creds(creds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(
 			auth.UnaryServerInterceptor(middleware.AuthInterceptor(token)),
