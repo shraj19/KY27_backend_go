@@ -42,6 +42,7 @@ type NotifyNodeWorker struct {
 
 // NewNotifyNodeWorker creates a worker that posts to the given Node URL.
 // The serviceToken is sent as "Authorization: Bearer <token>" for auth.
+// Additional security is provided by NCL (Network-level Controls).
 func NewNotifyNodeWorker(nodeWebhookURL, serviceToken string) *NotifyNodeWorker {
 	return &NotifyNodeWorker{
 		nodeWebhookURL: nodeWebhookURL,
