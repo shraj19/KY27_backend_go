@@ -25,6 +25,10 @@ type Config struct {
 	NodeWebhookURL string   `env:"NODE_WEBHOOK_URL,required"`
 	CorsOrigins    []string `env:"CORS_ORIGINS" envSeparator:","`
 
+	// TLS config for gRPC server (optional - if empty, runs insecure)
+	TLSCertPath string `env:"TLS_CERT_PATH"`
+	TLSKeyPath  string `env:"TLS_KEY_PATH"`
+
 	// Grafana Cloud (traces, metrics, logs via OTLP)
 	TempoEndpoint string `env:"TEMPO_ENDPOINT"`
 	TempoUser     string `env:"TEMPO_USER"`

@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
@@ -91,7 +92,7 @@ func main() {
 	orderSvc := order.NewService(gateway, riverPool, queries, jobAdapter, cfg.Gateway)
 
 	grpcAddr := fmt.Sprintf(":%d", cfg.GRPCPort)
-	grpcSrv := startGRPC(grpcAddr, orderSvc, cfg.ServiceToken)
+	grpcSrv := startGRPC(grpcAddr, orderSvc, cfg.ServiceToken, cfg.TLSCertPath, cfg.TLSKeyPath)
 
 	httpAddr := fmt.Sprintf(":%d", cfg.Port)
 	httpSrv := startHTTP(httpAddr, cfg, gateway, orderSvc)
@@ -147,26 +148,40 @@ func setupRiver(ctx context.Context, pool *pgxpool.Pool, nodeWebhookURL, service
 	return riverClient, nil
 }
 
-func startGRPC(addr string, orderSvc *order.Service, token string) *grpc.Server {
+func startGRPC(addr string, orderSvc *order.Service, token string, tlsCertPath, tlsKeyPath string) *grpc.Server {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		slog.Error("grpc listen failed", "err", err, "addr", addr)
 		os.Exit(1)
 	}
 
-	// NOTE: TLS disabled — internal service communication only.
-	// Traffic stays within AWS VPC. If TLS is needed later, see docs/ADR.md.
-	srv := grpc.NewServer(
+	// Build server options
+	opts := []grpc.ServerOption{
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(
 			auth.UnaryServerInterceptor(middleware.AuthInterceptor(token)),
 		),
-	)
+	}
+
+	// Add TLS if cert and key paths are provided
+	if tlsCertPath != "" && tlsKeyPath != "" {
+		creds, err := credentials.NewServerTLSFromFile(tlsCertPath, tlsKeyPath)
+		if err != nil {
+			slog.Error("failed to load TLS credentials", "err", err, "cert", tlsCertPath, "key", tlsKeyPath)
+			os.Exit(1)
+		}
+		opts = append(opts, grpc.Creds(creds))
+		slog.Info("grpc TLS enabled", "cert", tlsCertPath)
+	} else {
+		slog.Warn("grpc running WITHOUT TLS - only safe for local development")
+	}
+
+	srv := grpc.NewServer(opts...)
 	pb.RegisterPaymentServiceServer(srv, grpcserver.NewPaymentServer(orderSvc))
 	reflection.Register(srv)
 
 	go func() {
-		slog.Info("grpc listening", "addr", addr)
+		slog.Info("grpc listening", "addr", addr, "tls", tlsCertPath != "")
 		if err := srv.Serve(lis); err != nil {
 			slog.Error("grpc serve failed", "err", err)
 		}
