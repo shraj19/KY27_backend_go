@@ -97,11 +97,18 @@ func main() {
 	httpAddr := fmt.Sprintf(":%d", cfg.Port)
 	httpSrv := startHTTP(httpAddr, cfg, gateway, orderSvc)
 
+	// Start reconciliation job (checks pending orders every 5 minutes)
+	reconcileJob := jobs.NewReconciliationJob(orderSvc, 5*time.Minute, 10*time.Minute)
+	reconcileJob.Start(ctx)
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	slog.Info("shutting down")
+
+	// Stop reconciliation job
+	reconcileJob.Stop()
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -199,6 +206,35 @@ func startHTTP(addr string, cfg config.Config, gw payment.PaymentGateway, orderS
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "provider": cfg.Gateway})
+	})
+
+	// Manual reconciliation endpoint - check single order status with Cashfree
+	// Called by Node backend when user clicks "Check Status" button
+	r.POST("/orders/:orderId/reconcile", func(c *gin.Context) {
+		// Verify service token
+		authHeader := c.GetHeader("Authorization")
+		if authHeader != "Bearer "+cfg.ServiceToken {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+
+		orderID := c.Param("orderId")
+		if orderID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "order_id is required"})
+			return
+		}
+
+		newStatus, err := orderSvc.ReconcileOrder(c.Request.Context(), orderID)
+		if err != nil {
+			slog.Error("reconcile order failed", "order_id", orderID, "err", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to reconcile order"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"order_id": orderID,
+			"status":   string(newStatus),
+		})
 	})
 
 	webhookHandler := webhook.NewHandler(orderSvc)

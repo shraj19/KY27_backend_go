@@ -238,3 +238,48 @@ func (q *Queries) UpdateOrderStatus(ctx context.Context, arg UpdateOrderStatusPa
 	)
 	return i, err
 }
+
+
+const findActiveOrdersOlderThan = `-- name: FindActiveOrdersOlderThan :many
+SELECT id, buyer_id, total_paise, status, created_at
+FROM payments.orders
+WHERE status = 'ACTIVE'
+  AND created_at < $1
+ORDER BY created_at ASC
+LIMIT 100
+`
+
+type FindActiveOrdersOlderThanRow struct {
+	ID         string    `json:"id"`
+	BuyerID    string    `json:"buyer_id"`
+	TotalPaise int64     `json:"total_paise"`
+	Status     string    `json:"status"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// Find all ACTIVE orders created before the given timestamp (for reconciliation)
+func (q *Queries) FindActiveOrdersOlderThan(ctx context.Context, createdAt time.Time) ([]FindActiveOrdersOlderThanRow, error) {
+	rows, err := q.db.Query(ctx, findActiveOrdersOlderThan, createdAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FindActiveOrdersOlderThanRow
+	for rows.Next() {
+		var i FindActiveOrdersOlderThanRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.BuyerID,
+			&i.TotalPaise,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

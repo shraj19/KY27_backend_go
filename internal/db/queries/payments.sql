@@ -41,3 +41,12 @@ SELECT * FROM payments.idempotency_keys WHERE key = $1;
 INSERT INTO payments.idempotency_keys (key, body_hash, order_id)
 VALUES ($1, $2, $3)
 RETURNING *;
+
+-- name: FindActiveOrdersOlderThan :many
+-- Find all ACTIVE orders created before the given timestamp (for reconciliation)
+SELECT id, buyer_id, total_paise, status, created_at
+FROM payments.orders
+WHERE status = 'ACTIVE'
+  AND created_at < $1
+ORDER BY created_at ASC
+LIMIT 100;

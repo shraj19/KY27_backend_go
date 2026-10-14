@@ -243,9 +243,17 @@ func (s *Service) handleNoTransition(ctx context.Context, queries db.Querier, re
 	return nil
 }
 
-// Fail transitions ACTIVE → FAILED.
+// Fail transitions ACTIVE → FAILED and notifies Node.
 func (s *Service) Fail(ctx context.Context, orderID string, reason string) error {
-	order, err := s.queries.GetOrderStatus(ctx, orderID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	queries := s.querierFactory(tx)
+
+	order, err := queries.GetOrderStatus(ctx, orderID)
 	if err != nil {
 		return fmt.Errorf("get order: %w", err)
 	}
@@ -255,11 +263,20 @@ func (s *Service) Fail(ctx context.Context, orderID string, reason string) error
 		return nil // Idempotent
 	}
 
-	if _, err := s.queries.UpdateOrderStatus(ctx, db.UpdateOrderStatusParams{
+	if _, err := queries.UpdateOrderStatus(ctx, db.UpdateOrderStatusParams{
 		ID:     orderID,
 		Status: string(payment.StatusFailed),
 	}); err != nil {
 		return fmt.Errorf("update status: %w", err)
+	}
+
+	// Notify Node backend about the failure
+	if err := s.jobs.InsertTx(ctx, tx, orderID, string(payment.StatusFailed), order.TotalPaise, ""); err != nil {
+		return fmt.Errorf("enqueue notification: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 
 	slog.InfoContext(ctx, "order failed", "order_id", orderID, "reason", reason)
@@ -267,9 +284,17 @@ func (s *Service) Fail(ctx context.Context, orderID string, reason string) error
 	return nil
 }
 
-// Expire transitions ACTIVE → EXPIRED for orders past their expiry time.
+// Expire transitions ACTIVE → EXPIRED for orders past their expiry time and notifies Node.
 func (s *Service) Expire(ctx context.Context, orderID string) error {
-	order, err := s.queries.GetOrderStatus(ctx, orderID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	queries := s.querierFactory(tx)
+
+	order, err := queries.GetOrderStatus(ctx, orderID)
 	if err != nil {
 		return fmt.Errorf("get order: %w", err)
 	}
@@ -279,11 +304,20 @@ func (s *Service) Expire(ctx context.Context, orderID string) error {
 		return nil // Idempotent
 	}
 
-	if _, err := s.queries.UpdateOrderStatus(ctx, db.UpdateOrderStatusParams{
+	if _, err := queries.UpdateOrderStatus(ctx, db.UpdateOrderStatusParams{
 		ID:     orderID,
 		Status: string(payment.StatusExpired),
 	}); err != nil {
 		return fmt.Errorf("update status: %w", err)
+	}
+
+	// Notify Node backend about the expiry
+	if err := s.jobs.InsertTx(ctx, tx, orderID, string(payment.StatusExpired), order.TotalPaise, ""); err != nil {
+		return fmt.Errorf("enqueue notification: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 
 	slog.InfoContext(ctx, "order expired", "order_id", orderID)
@@ -298,6 +332,84 @@ func (s *Service) GetStatus(ctx context.Context, orderID string) (payment.Status
 		return payment.StatusUnknown, fmt.Errorf("get order: %w", err)
 	}
 	return payment.Status(order.Status), nil
+}
+
+// ReconcileOrder checks a single order's status with the payment provider and updates if needed.
+// Returns the new status after reconciliation.
+func (s *Service) ReconcileOrder(ctx context.Context, orderID string) (payment.Status, error) {
+	// Get current order from DB
+	order, err := s.queries.GetOrder(ctx, orderID)
+	if err != nil {
+		return payment.StatusUnknown, fmt.Errorf("get order: %w", err)
+	}
+
+	// Only reconcile ACTIVE orders (PENDING in your terms)
+	if order.Status != string(payment.StatusActive) {
+		return payment.Status(order.Status), nil
+	}
+
+	// Check with payment provider
+	providerStatus, err := s.gateway.VerifyPayment(ctx, orderID)
+	if err != nil {
+		return payment.StatusUnknown, fmt.Errorf("verify payment: %w", err)
+	}
+
+	slog.InfoContext(ctx, "reconciling order", "order_id", orderID, "db_status", order.Status, "provider_status", providerStatus)
+
+	switch providerStatus {
+	case payment.StatusPaid:
+		// Payment was successful but webhook missed - complete it now
+		if err := s.Complete(ctx, CompleteRequest{
+			OrderID:     orderID,
+			AmountPaise: order.TotalPaise,
+			PaidAt:      time.Now(), // Best effort - actual time unknown
+		}); err != nil {
+			return payment.StatusUnknown, fmt.Errorf("complete order: %w", err)
+		}
+		slog.InfoContext(ctx, "reconciled order to PAID", "order_id", orderID)
+		return payment.StatusPaid, nil
+
+	case payment.StatusFailed:
+		if err := s.Fail(ctx, orderID, "reconciliation_failed"); err != nil {
+			return payment.StatusUnknown, fmt.Errorf("fail order: %w", err)
+		}
+		slog.InfoContext(ctx, "reconciled order to FAILED", "order_id", orderID)
+		return payment.StatusFailed, nil
+
+	case payment.StatusExpired:
+		if err := s.Expire(ctx, orderID); err != nil {
+			return payment.StatusUnknown, fmt.Errorf("expire order: %w", err)
+		}
+		slog.InfoContext(ctx, "reconciled order to EXPIRED", "order_id", orderID)
+		return payment.StatusExpired, nil
+
+	default:
+		// Still active/pending at provider
+		return payment.StatusActive, nil
+	}
+}
+
+// ReconcilePendingOrders finds and reconciles all ACTIVE orders older than the given duration.
+func (s *Service) ReconcilePendingOrders(ctx context.Context, olderThan time.Duration) (int, error) {
+	cutoff := time.Now().Add(-olderThan)
+
+	orders, err := s.queries.FindActiveOrdersOlderThan(ctx, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("find active orders: %w", err)
+	}
+
+	reconciled := 0
+	for _, order := range orders {
+		_, err := s.ReconcileOrder(ctx, order.ID)
+		if err != nil {
+			slog.ErrorContext(ctx, "failed to reconcile order", "order_id", order.ID, "err", err)
+			continue
+		}
+		reconciled++
+	}
+
+	slog.InfoContext(ctx, "reconciliation complete", "found", len(orders), "reconciled", reconciled)
+	return reconciled, nil
 }
 
 func hashRequest(r CreateRequest) string {
