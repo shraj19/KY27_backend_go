@@ -50,3 +50,11 @@ WHERE status = 'ACTIVE'
   AND created_at < $1
 ORDER BY created_at ASC
 LIMIT 100;
+
+-- name: FindAllActiveOrders :many
+-- Find all ACTIVE orders (for reconciliation - checks with payment provider)
+SELECT id, buyer_id, total_paise, status, created_at
+FROM payments.orders
+WHERE status = 'ACTIVE'
+ORDER BY created_at ASC
+LIMIT 100;

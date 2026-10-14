@@ -283,3 +283,46 @@ func (q *Queries) FindActiveOrdersOlderThan(ctx context.Context, createdAt time.
 	}
 	return items, nil
 }
+
+const findAllActiveOrders = `-- name: FindAllActiveOrders :many
+SELECT id, buyer_id, total_paise, status, created_at
+FROM payments.orders
+WHERE status = 'ACTIVE'
+ORDER BY created_at ASC
+LIMIT 100
+`
+
+type FindAllActiveOrdersRow struct {
+	ID         string    `json:"id"`
+	BuyerID    string    `json:"buyer_id"`
+	TotalPaise int64     `json:"total_paise"`
+	Status     string    `json:"status"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// Find all ACTIVE orders (for reconciliation - checks with payment provider)
+func (q *Queries) FindAllActiveOrders(ctx context.Context) ([]FindAllActiveOrdersRow, error) {
+	rows, err := q.db.Query(ctx, findAllActiveOrders)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FindAllActiveOrdersRow
+	for rows.Next() {
+		var i FindAllActiveOrdersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.BuyerID,
+			&i.TotalPaise,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

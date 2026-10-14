@@ -12,6 +12,7 @@ import (
 type Querier interface {
 	CreateOrder(ctx context.Context, arg CreateOrderParams) (PaymentsOrder, error)
 	FindActiveOrdersOlderThan(ctx context.Context, createdAt time.Time) ([]FindActiveOrdersOlderThanRow, error)
+	FindAllActiveOrders(ctx context.Context) ([]FindAllActiveOrdersRow, error)
 	FindIdempotencyKey(ctx context.Context, key string) (PaymentsIdempotencyKey, error)
 	GetOrder(ctx context.Context, id string) (PaymentsOrder, error)
 	GetOrderByProviderOrderID(ctx context.Context, providerOrderID *string) (PaymentsOrder, error)

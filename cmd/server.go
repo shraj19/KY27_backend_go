@@ -97,8 +97,9 @@ func main() {
 	httpAddr := fmt.Sprintf(":%d", cfg.Port)
 	httpSrv := startHTTP(httpAddr, cfg, gateway, orderSvc)
 
-	// Start reconciliation job (checks pending orders every 5 minutes)
-	reconcileJob := jobs.NewReconciliationJob(orderSvc, 5*time.Minute, 10*time.Minute)
+	// Start reconciliation job (checks ALL pending orders every 2 minutes)
+	// Only updates status when Cashfree explicitly returns FAILED/EXPIRED
+	reconcileJob := jobs.NewReconciliationJob(orderSvc, 2*time.Minute, 0)
 	reconcileJob.Start(ctx)
 
 	quit := make(chan os.Signal, 1)

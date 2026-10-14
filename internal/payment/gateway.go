@@ -13,6 +13,7 @@ const (
 	StatusPaid    Status = "PAID"
 	StatusExpired Status = "EXPIRED"
 	StatusFailed  Status = "FAILED"
+	StatusTimeout Status = "TIMEOUT" // Order timed out after 45 min without resolution
 	StatusUnknown Status = "UNKNOWN"
 )
 

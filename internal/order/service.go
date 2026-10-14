@@ -325,6 +325,48 @@ func (s *Service) Expire(ctx context.Context, orderID string) error {
 	return nil
 }
 
+// Timeout transitions ACTIVE → TIMEOUT for orders that exceeded max pending duration (45 min).
+// This is different from FAILED (Cashfree rejected) or EXPIRED (Cashfree session expired).
+func (s *Service) Timeout(ctx context.Context, orderID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	queries := s.querierFactory(tx)
+
+	order, err := queries.GetOrderStatus(ctx, orderID)
+	if err != nil {
+		return fmt.Errorf("get order: %w", err)
+	}
+
+	if order.Status != "ACTIVE" {
+		slog.DebugContext(ctx, "timeout called for non-active order", "order_id", orderID, "status", order.Status)
+		return nil // Idempotent
+	}
+
+	if _, err := queries.UpdateOrderStatus(ctx, db.UpdateOrderStatusParams{
+		ID:     orderID,
+		Status: string(payment.StatusTimeout),
+	}); err != nil {
+		return fmt.Errorf("update status: %w", err)
+	}
+
+	// Notify Node backend about the timeout
+	if err := s.jobs.InsertTx(ctx, tx, orderID, string(payment.StatusTimeout), order.TotalPaise, ""); err != nil {
+		return fmt.Errorf("enqueue notification: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	slog.InfoContext(ctx, "order timed out", "order_id", orderID)
+	metrics.RecordPaymentFailed(ctx, "timeout_45min")
+	return nil
+}
+
 // GetStatus returns current order status.
 func (s *Service) GetStatus(ctx context.Context, orderID string) (payment.Status, error) {
 	order, err := s.queries.GetOrder(ctx, orderID)
@@ -389,22 +431,48 @@ func (s *Service) ReconcileOrder(ctx context.Context, orderID string) (payment.S
 	}
 }
 
-// ReconcilePendingOrders finds and reconciles all ACTIVE orders older than the given duration.
-func (s *Service) ReconcilePendingOrders(ctx context.Context, olderThan time.Duration) (int, error) {
-	cutoff := time.Now().Add(-olderThan)
+// ReconcilePendingOrders finds and reconciles all ACTIVE orders.
+// - Polls Cashfree for actual status
+// - Only marks FAILED/EXPIRED when Cashfree explicitly says so
+// - After 45 minutes of being ACTIVE, force marks as FAILED (timeout)
+func (s *Service) ReconcilePendingOrders(ctx context.Context, _ time.Duration) (int, error) {
+	const maxPendingDuration = 45 * time.Minute
 
-	orders, err := s.queries.FindActiveOrdersOlderThan(ctx, cutoff)
+	orders, err := s.queries.FindAllActiveOrders(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("find active orders: %w", err)
 	}
 
+	if len(orders) == 0 {
+		return 0, nil
+	}
+
+	slog.InfoContext(ctx, "reconciling pending orders", "count", len(orders))
+
 	reconciled := 0
 	for _, order := range orders {
-		_, err := s.ReconcileOrder(ctx, order.ID)
+		orderAge := time.Since(order.CreatedAt)
+
+		// Check with Cashfree first
+		newStatus, err := s.ReconcileOrder(ctx, order.ID)
 		if err != nil {
 			slog.ErrorContext(ctx, "failed to reconcile order", "order_id", order.ID, "err", err)
 			continue
 		}
+
+		// If still ACTIVE after reconciliation, check if we should timeout
+		if newStatus == payment.StatusActive && orderAge > maxPendingDuration {
+			slog.WarnContext(ctx, "order exceeded max pending time, marking as timeout",
+				"order_id", order.ID,
+				"age_minutes", orderAge.Minutes(),
+				"max_minutes", maxPendingDuration.Minutes())
+
+			if err := s.Timeout(ctx, order.ID); err != nil {
+				slog.ErrorContext(ctx, "failed to timeout order", "order_id", order.ID, "err", err)
+				continue
+			}
+		}
+
 		reconciled++
 	}
 

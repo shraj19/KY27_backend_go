@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"ky27/backend/internal/config"
@@ -117,7 +118,10 @@ func (p *cashfreeProvider) VerifyPayment(ctx context.Context, orderID string) (S
 	if err != nil {
 		return StatusUnknown, fmt.Errorf("cashfree: verify payment: %w", err)
 	}
-	return mapCashfreeStatus(derefStr(resp.OrderStatus)), nil
+	rawStatus := derefStr(resp.OrderStatus)
+	mappedStatus := mapCashfreeStatus(rawStatus)
+	slog.InfoContext(ctx, "cashfree verify payment", "order_id", orderID, "raw_status", rawStatus, "mapped_status", mappedStatus)
+	return mappedStatus, nil
 }
 
 func (p *cashfreeProvider) VerifyWebhook(signature string, body []byte, timestamp string) (WebhookEvent, error) {
